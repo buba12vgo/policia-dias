@@ -1,0 +1,287 @@
+import React, { useState, useEffect } from 'react';
+import { onAuthStateChanged, signInWithEmailAndPassword, signOut, createUserWithEmailAndPassword } from 'firebase/auth';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
+import * as XLSX from 'xlsx';
+import { auth, db } from './firebase';
+
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [agente, setAgente] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [usuarioInput, setUsuarioInput] = useState('');
+  const [passwordInput, setPasswordInput] = useState('');
+  const [errorLogin, setErrorLogin] = useState('');
+  const [subiendoExcel, setSubiendoExcel] = useState(false);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      if (currentUser) {
+        setUser(currentUser);
+        const docRef = doc(db, "policias", currentUser.email.toLowerCase().trim());
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+          setAgente(docSnap.data());
+        }
+      } else {
+        setUser(null);
+        setAgente(null);
+      }
+      setLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    setErrorLogin('');
+    if (!usuarioInput || !passwordInput) {
+      setErrorLogin('Introduce tu usuario y tu TIP de 3 dígitos');
+      return;
+    }
+
+    const usuarioClean = usuarioInput.toLowerCase().trim();
+    const passClean = passwordInput.trim().padStart(3, '0');
+    const emailTech = `${usuarioClean}@policiaportuaria.local`;
+
+    try {
+      await signInWithEmailAndPassword(auth, emailTech, passClean);
+    } catch (err) {
+      setErrorLogin('Usuario o contraseña/TIP incorrectos.');
+    }
+  };
+
+  const handleExcelUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    setSubiendoExcel(true);
+    const reader = new FileReader();
+
+    reader.onload = async (evt) => {
+      try {
+        const bstr = evt.target.result;
+        const wb = XLSX.read(bstr, { type: 'binary' });
+        const sheetTotal = wb.Sheets['TOTAL'];
+
+        if (!sheetTotal) {
+          alert("Error: No se encontró la pestaña 'TOTAL' en el Excel.");
+          setSubiendoExcel(false);
+          return;
+        }
+
+        const data = XLSX.utils.sheet_to_json(sheetTotal);
+
+        for (const fila of data) {
+          if (!fila.NOMBRE || !fila.TIP) continue;
+
+          const tipStr = String(Math.floor(fila.TIP)).trim().padStart(3, '0');
+          const usuarioWin = fila['USUARIO WINDOWS'] 
+            ? String(fila['USUARIO WINDOWS']).toLowerCase().trim() 
+            : `policia${tipStr}`;
+
+          const emailAuth = `${usuarioWin}@policiaportuaria.local`;
+          const passwordAuth = tipStr;
+
+          try {
+            await createUserWithEmailAndPassword(auth, emailAuth, passwordAuth);
+          } catch (err) {
+            // Usuario ya existente
+          }
+
+          await setDoc(doc(db, "policias", emailAuth), {
+            nombre: fila.NOMBRE,
+            tip: tipStr,
+            usuarioWindows: usuarioWin,
+            saldos: {
+              vacaciones: {
+                totales: Number(fila.VACACIONES_T || 0),
+                usados: Number(fila.VACACIONES_U || 0),
+                pendientes: Number(fila.VACACIONES_P || 0)
+              },
+              asuntosPropios: {
+                totales: Number(fila.PROPIOS_T || 0),
+                usados: Number(fila.PROPIOS_U || 0),
+                pendientes: Number(fila.PROPIOS_P || 0)
+              },
+              convenio: {
+                totales: Number(fila.DISPONIBLE_T || 0),
+                usados: Number(fila.DISPONIBLE_U || 0),
+                pendientes: Number(fila.DISPONIBLE_P || 0)
+              },
+              vacAdicionales: Number(fila.VAC_ADIC_P || 0),
+              diasAnteriores: Number(fila.ANTERIOR_P || 0),
+              jornadaVerano: Number(fila.VERANO_P || 0),
+              fiestasEspeciales: {
+                julio16: Number(fila.JULIO16_P || 0),
+                diciembre24: Number(fila.DICIEMBRE24_P || 0),
+                diciembre31: Number(fila.DICIEMBRE31_P || 0)
+              },
+              totalGlobal: Number(fila.TOTAL_P || 0)
+            },
+            ultimaActualizacion: new Date().toLocaleDateString('es-ES')
+          }, { merge: true });
+        }
+
+        alert("¡Excel cargado y usuarios sincronizados con éxito!");
+        window.location.reload();
+      } catch (err) {
+        alert("Error procesando el archivo: " + err.message);
+      }
+      setSubiendoExcel(false);
+    };
+
+    reader.readAsBinaryString(file);
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center">
+        <p className="animate-pulse text-lg font-medium">Cargando Consulta de Días...</p>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-slate-900 text-slate-100 flex items-center justify-center p-4">
+        <div className="bg-slate-800 p-8 rounded-2xl shadow-xl w-full max-w-md border border-slate-700">
+          <div className="text-center mb-6">
+            <div className="bg-blue-600 text-white font-black rounded-xl w-14 h-14 mx-auto flex items-center justify-center text-2xl shadow-lg mb-3">
+              PP
+            </div>
+            <h1 className="text-2xl font-bold">Policía Portuaria</h1>
+            <p className="text-xs text-slate-400 mt-1">Consulta Individual de Permisos 2026</p>
+          </div>
+
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 uppercase mb-1">Usuario de Windows</label>
+              <input 
+                type="text" 
+                placeholder="Ej: estevez.ricardo"
+                value={usuarioInput}
+                onChange={(e) => setUsuarioInput(e.target.value)}
+                className="w-full p-3 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 uppercase mb-1">Contraseña (TIP 3 Dígitos)</label>
+              <input 
+                type="password" 
+                placeholder="Ej: 021"
+                value={passwordInput}
+                onChange={(e) => setPasswordInput(e.target.value)}
+                className="w-full p-3 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+              />
+            </div>
+
+            {errorLogin && <p className="text-red-400 text-xs text-center">{errorLogin}</p>}
+
+            <button 
+              type="submit" 
+              className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-lg transition duration-200 shadow-md"
+            >
+              Consultar Mis Días
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-100 text-slate-800 pb-12">
+      <nav className="bg-slate-900 text-white px-6 py-4 shadow-lg flex justify-between items-center">
+        <div className="flex items-center space-x-3">
+          <div className="bg-blue-600 text-white font-black rounded-lg w-10 h-10 flex items-center justify-center text-lg shadow">
+            PP
+          </div>
+          <div>
+            <h1 className="font-bold text-base leading-tight">Policía Portuaria</h1>
+            <p className="text-xs text-slate-400">Consulta de Saldos 2026</p>
+          </div>
+        </div>
+        <button 
+          onClick={() => signOut(auth)}
+          className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-2 rounded-md transition border border-slate-700"
+        >
+          Desconectar
+        </button>
+      </nav>
+
+      <main className="max-w-4xl mx-auto p-4 md:p-6 space-y-6">
+        {agente ? (
+          <>
+            <div className="bg-white rounded-xl shadow-sm p-5 border border-slate-200 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+              <div>
+                <span className="text-xs font-bold tracking-wider uppercase text-blue-600 bg-blue-50 px-2.5 py-1 rounded-md">
+                  TIP: {agente.tip}
+                </span>
+                <h2 className="text-2xl font-extrabold text-slate-900 mt-2">{agente.nombre}</h2>
+              </div>
+              <div className="text-left sm:text-right text-xs text-slate-400">
+                Última actualización Excel: <br />
+                <span className="font-medium text-slate-700">{agente.ultimaActualizacion}</span>
+              </div>
+            </div>
+
+            <div className="bg-gradient-to-r from-blue-900 to-slate-900 text-white p-6 rounded-xl shadow-md flex justify-around items-center text-center">
+              <div>
+                <span className="block text-4xl font-black text-blue-400">{agente.saldos?.totalGlobal || 0}</span>
+                <span className="text-xs text-slate-300 font-medium uppercase tracking-wider">Total Días Pendientes</span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+                <span className="text-xs font-bold text-blue-600 uppercase tracking-wider bg-blue-50 px-2 py-0.5 rounded">Vacaciones</span>
+                <div className="flex items-baseline space-x-2 my-2">
+                  <span className="text-4xl font-black text-slate-900">{agente.saldos?.vacaciones?.pendientes || 0}</span>
+                  <span className="text-xs text-slate-500 font-medium">pendientes</span>
+                </div>
+                <p className="text-xs text-slate-400 border-t pt-2 mt-2">Usados: {agente.saldos?.vacaciones?.usados || 0} de {agente.saldos?.vacaciones?.totales || 0}</p>
+              </div>
+
+              <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+                <span className="text-xs font-bold text-emerald-600 uppercase tracking-wider bg-emerald-50 px-2 py-0.5 rounded">Asuntos Propios</span>
+                <div className="flex items-baseline space-x-2 my-2">
+                  <span className="text-4xl font-black text-slate-900">{agente.saldos?.asuntosPropios?.pendientes || 0}</span>
+                  <span className="text-xs text-slate-500 font-medium">disponibles</span>
+                </div>
+                <p className="text-xs text-slate-400 border-t pt-2 mt-2">Usados: {agente.saldos?.asuntosPropios?.usados || 0} de {agente.saldos?.asuntosPropios?.totales || 0}</p>
+              </div>
+
+              <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+                <span className="text-xs font-bold text-amber-600 uppercase tracking-wider bg-amber-50 px-2 py-0.5 rounded">Disp. Adicional</span>
+                <div className="flex items-baseline space-x-2 my-2">
+                  <span className="text-4xl font-black text-slate-900">{agente.saldos?.convenio?.pendientes || 0}</span>
+                  <span className="text-xs text-slate-500 font-medium">acumulados</span>
+                </div>
+                <p className="text-xs text-slate-400 border-t pt-2 mt-2">Usados: {agente.saldos?.convenio?.usados || 0} de {agente.saldos?.convenio?.totales || 0}</p>
+              </div>
+            </div>
+
+            <div className="bg-slate-800 text-white p-5 rounded-xl shadow-md mt-8">
+              <h3 className="font-bold text-sm text-slate-200 mb-1">Zona Admin: Sincronizar Excel 2026</h3>
+              <p className="text-xs text-slate-400 mb-3">Sube el archivo "2026 DIAS POLIPOR.xlsx" para actualizar los saldos globales de la plantilla.</p>
+              <input 
+                type="file" 
+                accept=".xlsx, .xls"
+                onChange={handleExcelUpload}
+                disabled={subiendoExcel}
+                className="block w-full text-xs text-slate-300 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-500 cursor-pointer"
+              />
+              {subiendoExcel && <p className="text-xs text-amber-400 mt-2 animate-pulse">Procesando plantilla e importando a Firestore...</p>}
+            </div>
+          </>
+        ) : (
+          <div className="bg-white p-6 rounded-xl text-center">
+            <p className="text-slate-600 font-medium">No se encontraron datos registrados para este usuario en Firestore.</p>
+            <p className="text-xs text-slate-400 mt-2">Pide al administrador que suba la plantilla Excel actualizada.</p>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
