@@ -6,21 +6,26 @@
     <title>Policía Portuaria - Autoridad Portuaria de Vigo</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: 'class',
+      }
+    </script>
     <!-- React & ReactDOM CDN -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <!-- Babel standalone para leer JSX en navegador -->
+    <!-- Babel standalone -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <!-- XLSX library -->
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   </head>
-  <body class="bg-slate-900 text-slate-100">
+  <body class="bg-slate-900 text-slate-100 min-h-screen transition-colors duration-200">
     <div id="root"></div>
 
-    <!-- Cargar Firebase Firestore vía CDN -->
+    <!-- Firebase Firestore via CDN -->
     <script type="module">
       import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-      import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+      import { getFirestore, doc, getDoc, setDoc, collection, getDocs } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
       const firebaseConfig = {
         apiKey: "AIzaSyC0nN9LYhqmY--jzwbHBo7Uq5mdFpYq57w",
@@ -33,11 +38,11 @@
 
       const app = initializeApp(firebaseConfig);
       window.db = getFirestore(app);
-      window.fbDb = { doc, getDoc, setDoc };
+      window.fbDb = { doc, getDoc, setDoc, collection, getDocs };
     </script>
 
     <script type="text/babel">
-      const { useState } = React;
+      const { useState, useEffect } = React;
 
       function App() {
         const [userSession, setUserSession] = useState(null);
@@ -46,6 +51,39 @@
         const [passwordInput, setPasswordInput] = useState('');
         const [errorLogin, setErrorLogin] = useState('');
         const [subiendoExcel, setSubiendoExcel] = useState(false);
+        const [darkMode, setDarkMode] = useState(true);
+        
+        // Estado para el panel de Admin
+        const [listaAgentes, setListaAgentes] = useState([]);
+        const [busquedaAdmin, setBusquedaAdmin] = useState('');
+        const [agenteSeleccionadoAdmin, setAgenteSeleccionadoAdmin] = useState(null);
+
+        // Control de tema claro / oscuro
+        useEffect(() => {
+          if (darkMode) {
+            document.documentElement.classList.add('dark');
+            document.body.className = "bg-slate-900 text-slate-100 min-h-screen";
+          } else {
+            document.documentElement.classList.remove('dark');
+            document.body.className = "bg-slate-100 text-slate-800 min-h-screen";
+          }
+        }, [darkMode]);
+
+        // Cargar lista de agentes para el admin
+        const cargarAgentesAdmin = async () => {
+          try {
+            const querySnapshot = await window.fbDb.getDocs(window.fbDb.collection(window.db, "policias"));
+            const lista = [];
+            querySnapshot.forEach((doc) => {
+              lista.push(doc.data());
+            });
+            // Ordenar por TIP
+            lista.sort((a, b) => Number(a.tip) - Number(b.tip));
+            setListaAgentes(lista);
+          } catch (e) {
+            console.error("Error cargando agentes:", e);
+          }
+        };
 
         const handleLogin = async (e) => {
           e.preventDefault();
@@ -60,6 +98,7 @@
 
           if (usuarioClean === 'rromdur') {
             setUserSession({ usuario: 'rromdur', isAdmin: true });
+            cargarAgentesAdmin();
             return;
           }
 
@@ -104,12 +143,14 @@
                 return;
               }
 
-              // Parsear como JSON estándar usando los nombres de las columnas
               const data = XLSX.utils.sheet_to_json(sheetTotal);
               let guardados = 0;
 
+              // Fecha Y HORA exacta de actualización
+              const ahora = new Date();
+              const fechaHoraStr = `${ahora.toLocaleDateString('es-ES')} a las ${ahora.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}`;
+
               for (const fila of data) {
-                // Buscamos claves sin importar mayúsculas/minúsculas ni espacios extra
                 const getCol = (possibleNames) => {
                   const key = Object.keys(fila).find(k => 
                     possibleNames.some(p => k.trim().toUpperCase() === p.toUpperCase())
@@ -139,7 +180,6 @@
                   return isNaN(n) ? 0 : n;
                 };
 
-                // Mapeo exacto por nombre de columna
                 await window.fbDb.setDoc(window.fbDb.doc(window.db, "policias", docKey), {
                   nombre: String(nombreRaw).trim(),
                   tip: tipStr,
@@ -170,14 +210,14 @@
                     },
                     totalGlobal: parseNum(getCol(['TOTAL_P', 'TOTAL P', 'TOTAL PENDIENTE', 'TOTAL']))
                   },
-                  ultimaActualizacion: new Date().toLocaleDateString('es-ES')
+                  ultimaActualizacion: fechaHoraStr
                 }, { merge: true });
 
                 guardados++;
               }
 
-              alert(`¡Éxito! Se han importado correctamente ${guardados} agentes con sus saldos exactos.`);
-              window.location.reload();
+              alert(`¡Éxito! Se han importado ${guardados} agentes con fecha y hora actualizadas.`);
+              cargarAgentesAdmin();
             } catch (err) {
               alert("Error procesando el Excel: " + err.message);
             }
@@ -187,9 +227,17 @@
           reader.readAsBinaryString(file);
         };
 
+        const agentesFiltrados = listaAgentes.filter(a => 
+          a.nombre?.toLowerCase().includes(busquedaAdmin.toLowerCase()) ||
+          a.tip?.includes(busquedaAdmin) ||
+          a.usuarioWindows?.toLowerCase().includes(busquedaAdmin.toLowerCase())
+        );
+
+        const agenteMostrado = agente || agenteSeleccionadoAdmin;
+
         if (!userSession) {
           return (
-            <div className="min-h-screen bg-slate-900 text-slate-100 flex items-center justify-center p-4">
+            <div className="min-h-screen flex items-center justify-center p-4">
               <div className="bg-slate-800 p-8 rounded-2xl shadow-2xl w-full max-w-md border border-slate-700">
                 <div className="text-center mb-6 flex flex-col items-center">
                   <div className="w-16 h-16 bg-slate-900 rounded-full border-2 border-amber-500 flex items-center justify-center mb-3 shadow-lg">
@@ -232,14 +280,23 @@
                     Consultar Mis Días
                   </button>
                 </form>
+
+                <div className="mt-6 text-center">
+                  <button 
+                    onClick={() => setDarkMode(!darkMode)} 
+                    className="text-xs text-slate-400 hover:text-amber-400 transition"
+                  >
+                    {darkMode ? '☀️ Cambiar a Modo Claro' : '🌙 Cambiar a Modo Oscuro'}
+                  </button>
+                </div>
               </div>
             </div>
           );
         }
 
         return (
-          <div className="min-h-screen bg-slate-100 text-slate-800 pb-12">
-            <nav className="bg-slate-900 text-white px-6 py-4 shadow-lg flex justify-between items-center border-b border-slate-800">
+          <div className="min-h-screen pb-12">
+            <nav className="bg-slate-900 text-white px-6 py-4 shadow-lg flex justify-between items-center border-b border-slate-800 print:hidden">
               <div className="flex items-center space-x-3">
                 <div className="w-10 h-10 bg-slate-800 rounded-full border border-amber-500 flex items-center justify-center text-lg shadow">
                   ⚓
@@ -249,115 +306,169 @@
                   <p className="text-[11px] text-amber-400 font-medium">Puerto de Vigo · Saldos 2026</p>
                 </div>
               </div>
-              <button 
-                onClick={() => window.location.reload()}
-                className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-2 rounded-md transition border border-slate-700"
-              >
-                Desconectar
-              </button>
+
+              <div className="flex items-center space-x-3">
+                <button 
+                  onClick={() => setDarkMode(!darkMode)}
+                  className="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-amber-400 text-sm border border-slate-700"
+                  title="Cambiar tema"
+                >
+                  {darkMode ? '☀️' : '🌙'}
+                </button>
+
+                <button 
+                  onClick={() => window.location.reload()}
+                  className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-2 rounded-md transition border border-slate-700"
+                >
+                  Desconectar
+                </button>
+              </div>
             </nav>
 
             <main className="max-w-4xl mx-auto p-4 md:p-6 space-y-6">
-              {agente ? (
-                <>
-                  <div className="bg-white rounded-xl shadow-sm p-5 border border-slate-200 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+              {userSession.isAdmin && (
+                <div className="bg-slate-800 text-white p-6 rounded-xl shadow-lg border border-slate-700 space-y-4 print:hidden">
+                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                     <div>
-                      <span className="text-xs font-bold tracking-wider uppercase text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-md">
-                        TIP: {agente.tip}
-                      </span>
-                      <h2 className="text-2xl font-extrabold text-slate-900 mt-2">{agente.nombre}</h2>
+                      <h3 className="text-lg font-bold text-amber-400">Panel de Administración</h3>
+                      <p className="text-xs text-slate-300">Carga el Excel o busca cualquier agente de la plantilla.</p>
                     </div>
-                    <div className="text-left sm:text-right text-xs text-slate-400">
-                      Última actualización Excel: <br />
-                      <span className="font-medium text-slate-700">{agente.ultimaActualizacion}</span>
+
+                    <label className="bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold py-2.5 px-4 rounded-lg cursor-pointer transition shadow border border-amber-400">
+                      {subiendoExcel ? 'Procesando...' : '📁 Actualizar Excel'}
+                      <input 
+                        type="file" 
+                        accept=".xlsx, .xls"
+                        onChange={handleExcelUpload}
+                        disabled={subiendoExcel}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-700">
+                    <input 
+                      type="text" 
+                      placeholder="🔍 Buscar agente por TIP, Nombre o Usuario..."
+                      value={busquedaAdmin}
+                      onChange={(e) => setBusquedaAdmin(e.target.value)}
+                      className="w-full p-2.5 bg-slate-900 border border-slate-600 rounded-lg text-sm text-white placeholder-slate-400 focus:outline-none focus:border-amber-500"
+                    />
+
+                    {busquedaAdmin && (
+                      <div className="mt-2 bg-slate-900 border border-slate-700 rounded-lg max-h-48 overflow-y-auto divide-y divide-slate-800">
+                        {agentesFiltrados.length > 0 ? (
+                          agentesFiltrados.map((a) => (
+                            <div 
+                              key={a.tip} 
+                              onClick={() => { setAgenteSeleccionadoAdmin(a); setBusquedaAdmin(''); }}
+                              className="p-2.5 hover:bg-slate-800 cursor-pointer flex justify-between items-center text-xs"
+                            >
+                              <span className="font-bold text-slate-200">{a.nombre}</span>
+                              <span className="bg-amber-900/60 text-amber-300 px-2 py-0.5 rounded border border-amber-700/50">TIP: {a.tip}</span>
+                            </div>
+                          ))
+                        ) : (
+                          <p className="p-3 text-xs text-slate-400 text-center">No se encontraron agentes con ese filtro.</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {agenteMostrado ? (
+                <>
+                  <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm p-5 border border-slate-200 dark:border-slate-700 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                    <div>
+                      <span className="text-xs font-bold tracking-wider uppercase text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800 px-2.5 py-1 rounded-md">
+                        TIP: {agenteMostrado.tip}
+                      </span>
+                      <h2 className="text-2xl font-extrabold text-slate-900 dark:text-white mt-2">{agenteMostrado.nombre}</h2>
+                    </div>
+
+                    <div className="flex flex-col items-start sm:items-end gap-2">
+                      <div className="text-left sm:text-right text-xs text-slate-400">
+                        Última actualización: <br />
+                        <span className="font-medium text-slate-700 dark:text-slate-300">{agenteMostrado.ultimaActualizacion || 'Fecha no registrada'}</span>
+                      </div>
+
+                      <button 
+                        onClick={() => window.print()}
+                        className="text-xs bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-600 flex items-center gap-1.5 transition print:hidden"
+                      >
+                        🖨️ Imprimir Resumen
+                      </button>
                     </div>
                   </div>
 
                   <div className="bg-gradient-to-r from-slate-900 via-blue-950 to-slate-900 text-white p-6 rounded-xl shadow-md flex justify-around items-center text-center border-t-2 border-amber-500">
                     <div>
-                      <span className="block text-5xl font-black text-amber-400">{agente.saldos?.totalGlobal || 0}</span>
+                      <span className="block text-5xl font-black text-amber-400">{agenteMostrado.saldos?.totalGlobal || 0}</span>
                       <span className="text-xs text-slate-300 font-bold uppercase tracking-wider">Total Días Pendientes</span>
                     </div>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
-                      <span className="text-xs font-bold text-blue-600 uppercase tracking-wider bg-blue-50 px-2 py-0.5 rounded">Vacaciones</span>
+                    <div className="bg-white dark:bg-slate-800 p-5 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm">
+                      <span className="text-xs font-bold text-blue-600 dark:text-blue-400 uppercase tracking-wider bg-blue-50 dark:bg-blue-950/50 px-2 py-0.5 rounded">Vacaciones</span>
                       <div className="flex items-baseline space-x-2 my-2">
-                        <span className="text-4xl font-black text-slate-900">{agente.saldos?.vacaciones?.pendientes || 0}</span>
-                        <span className="text-xs text-slate-500 font-medium">pendientes</span>
+                        <span className="text-4xl font-black text-slate-900 dark:text-white">{agenteMostrado.saldos?.vacaciones?.pendientes || 0}</span>
+                        <span className="text-xs text-slate-500 dark:text-slate-400 font-medium">pendientes</span>
                       </div>
-                      <p className="text-xs text-slate-400 border-t pt-2 mt-2">Usados: {agente.saldos?.vacaciones?.usados || 0} de {agente.saldos?.vacaciones?.totales || 0}</p>
+                      <p className="text-xs text-slate-400 border-t border-slate-100 dark:border-slate-700 pt-2 mt-2">Usados: {agenteMostrado.saldos?.vacaciones?.usados || 0} de {agenteMostrado.saldos?.vacaciones?.totales || 0}</p>
                     </div>
 
-                    <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
-                      <span className="text-xs font-bold text-emerald-600 uppercase tracking-wider bg-emerald-50 px-2 py-0.5 rounded">Asuntos Propios</span>
+                    <div className="bg-white dark:bg-slate-800 p-5 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm">
+                      <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider bg-emerald-50 dark:bg-emerald-950/50 px-2 py-0.5 rounded">Asuntos Propios</span>
                       <div className="flex items-baseline space-x-2 my-2">
-                        <span className="text-4xl font-black text-slate-900">{agente.saldos?.asuntosPropios?.pendientes || 0}</span>
-                        <span className="text-xs text-slate-500 font-medium">disponibles</span>
+                        <span className="text-4xl font-black text-slate-900 dark:text-white">{agenteMostrado.saldos?.asuntosPropios?.pendientes || 0}</span>
+                        <span className="text-xs text-slate-500 dark:text-slate-400 font-medium">disponibles</span>
                       </div>
-                      <p className="text-xs text-slate-400 border-t pt-2 mt-2">Usados: {agente.saldos?.asuntosPropios?.usados || 0} de {agente.saldos?.asuntosPropios?.totales || 0}</p>
+                      <p className="text-xs text-slate-400 border-t border-slate-100 dark:border-slate-700 pt-2 mt-2">Usados: {agenteMostrado.saldos?.asuntosPropios?.usados || 0} de {agenteMostrado.saldos?.asuntosPropios?.totales || 0}</p>
                     </div>
 
-                    <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
-                      <span className="text-xs font-bold text-amber-600 uppercase tracking-wider bg-amber-50 px-2 py-0.5 rounded">Disp. Adicional</span>
+                    <div className="bg-white dark:bg-slate-800 p-5 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm">
+                      <span className="text-xs font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wider bg-amber-50 dark:bg-amber-950/50 px-2 py-0.5 rounded">Disp. Adicional</span>
                       <div className="flex items-baseline space-x-2 my-2">
-                        <span className="text-4xl font-black text-slate-900">{agente.saldos?.convenio?.pendientes || 0}</span>
-                        <span className="text-xs text-slate-500 font-medium">acumulados</span>
+                        <span className="text-4xl font-black text-slate-900 dark:text-white">{agenteMostrado.saldos?.convenio?.pendientes || 0}</span>
+                        <span className="text-xs text-slate-500 dark:text-slate-400 font-medium">acumulados</span>
                       </div>
-                      <p className="text-xs text-slate-400 border-t pt-2 mt-2">Usados: {agente.saldos?.convenio?.usados || 0} de {agente.saldos?.convenio?.totales || 0}</p>
+                      <p className="text-xs text-slate-400 border-t border-slate-100 dark:border-slate-700 pt-2 mt-2">Usados: {agenteMostrado.saldos?.convenio?.usados || 0} de {agenteMostrado.saldos?.convenio?.totales || 0}</p>
                     </div>
                   </div>
 
-                  <div className="bg-white rounded-xl p-5 border border-slate-200 shadow-sm space-y-4">
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 border-b pb-2">Otros Saldos y Permisos Especiales</h3>
+                  <div className="bg-white dark:bg-slate-800 rounded-xl p-5 border border-slate-200 dark:border-slate-700 shadow-sm space-y-4">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 border-b border-slate-100 dark:border-slate-700 pb-2">Otros Saldos y Permisos Especiales</h3>
                     
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-center">
-                      <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
-                        <span className="block text-2xl font-bold text-slate-800">{agente.saldos?.vacAdicionales || 0}</span>
-                        <span className="text-[11px] text-slate-500 font-medium uppercase">Vac. Adicionales</span>
+                      <div className="bg-slate-50 dark:bg-slate-900/50 p-3 rounded-lg border border-slate-100 dark:border-slate-700/50">
+                        <span className="block text-2xl font-bold text-slate-800 dark:text-slate-100">{agenteMostrado.saldos?.vacAdicionales || 0}</span>
+                        <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium uppercase">Vac. Adicionales</span>
                       </div>
 
-                      <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
-                        <span className="block text-2xl font-bold text-slate-800">{agente.saldos?.diasAnteriores || 0}</span>
-                        <span className="text-[11px] text-slate-500 font-medium uppercase">Días Años Anteriores</span>
+                      <div className="bg-slate-50 dark:bg-slate-900/50 p-3 rounded-lg border border-slate-100 dark:border-slate-700/50">
+                        <span className="block text-2xl font-bold text-slate-800 dark:text-slate-100">{agenteMostrado.saldos?.diasAnteriores || 0}</span>
+                        <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium uppercase">Días Años Anteriores</span>
                       </div>
 
-                      <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
-                        <span className="block text-2xl font-bold text-slate-800">{agente.saldos?.jornadaVerano || 0}</span>
-                        <span className="text-[11px] text-slate-500 font-medium uppercase">Jornada Verano</span>
+                      <div className="bg-slate-50 dark:bg-slate-900/50 p-3 rounded-lg border border-slate-100 dark:border-slate-700/50">
+                        <span className="block text-2xl font-bold text-slate-800 dark:text-slate-100">{agenteMostrado.saldos?.jornadaVerano || 0}</span>
+                        <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium uppercase">Jornada Verano</span>
                       </div>
 
-                      <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
-                        <span className="block text-2xl font-bold text-slate-800">
-                          {(agente.saldos?.fiestasEspeciales?.julio16 || 0) + 
-                           (agente.saldos?.fiestasEspeciales?.diciembre24 || 0) + 
-                           (agente.saldos?.fiestasEspeciales?.diciembre31 || 0)}
+                      <div className="bg-slate-50 dark:bg-slate-900/50 p-3 rounded-lg border border-slate-100 dark:border-slate-700/50">
+                        <span className="block text-2xl font-bold text-slate-800 dark:text-slate-100">
+                          {(agenteMostrado.saldos?.fiestasEspeciales?.julio16 || 0) + 
+                           (agenteMostrado.saldos?.fiestasEspeciales?.diciembre24 || 0) + 
+                           (agenteMostrado.saldos?.fiestasEspeciales?.diciembre31 || 0)}
                         </span>
-                        <span className="text-[11px] text-slate-500 font-medium uppercase">Fiestas Especiales</span>
+                        <span className="text-[11px] text-slate-500 dark:text-slate-400 font-medium uppercase">Fiestas Especiales</span>
                       </div>
                     </div>
                   </div>
                 </>
-              ) : (
-                <div className="bg-white p-6 rounded-xl text-center shadow-sm border border-slate-200">
-                  <h3 className="text-lg font-bold text-slate-900 mb-1">Panel Administrador</h3>
-                  <p className="text-slate-600 text-sm mb-4">Sube la plantilla Excel para sincronizar todos los saldos directamente.</p>
-                  
-                  <div className="bg-slate-800 text-white p-5 rounded-xl text-left max-w-xl mx-auto shadow-md border-t-2 border-amber-500">
-                    <h4 className="font-bold text-sm text-slate-200 mb-1">Cargar Plantilla Excel 2026</h4>
-                    <p className="text-xs text-slate-400 mb-3">Sube el archivo para volcar los saldos exactos a Firestore.</p>
-                    <input 
-                      type="file" 
-                      accept=".xlsx, .xls"
-                      onChange={handleExcelUpload}
-                      disabled={subiendoExcel}
-                      className="block w-full text-xs text-slate-300 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-slate-700 file:text-white hover:file:bg-amber-600 cursor-pointer"
-                    />
-                    {subiendoExcel && <p className="text-xs text-amber-400 mt-2 animate-pulse">Sincronizando registros con Firestore...</p>}
-                  </div>
-                </div>
-              )}
+              ) : null}
             </main>
           </div>
         );
