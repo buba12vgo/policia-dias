@@ -104,37 +104,21 @@
                 return;
               }
 
-              const rawData = XLSX.utils.sheet_to_json(sheetTotal, { header: 1 });
-
-              let headerRowIndex = rawData.findIndex(row => 
-                row && row.some(cell => String(cell).toUpperCase().includes('TIP'))
-              );
-
-              if (headerRowIndex === -1) headerRowIndex = 0;
-
-              const headers = rawData[headerRowIndex].map(h => String(h || '').trim().toUpperCase());
-
-              const getVal = (row, keyKeywords) => {
-                const colIdx = headers.findIndex(h => keyKeywords.some(k => h.includes(k)));
-                if (colIdx === -1 || !row[colIdx]) return 0;
-                const val = Number(row[colIdx]);
-                return isNaN(val) ? 0 : val;
-              };
-
-              const getStr = (row, keyKeywords) => {
-                const colIdx = headers.findIndex(h => keyKeywords.some(k => h.includes(k)));
-                if (colIdx === -1 || row[colIdx] === undefined) return '';
-                return String(row[colIdx]).trim();
-              };
-
+              // Parsear como JSON estándar usando los nombres de las columnas
+              const data = XLSX.utils.sheet_to_json(sheetTotal);
               let guardados = 0;
 
-              for (let i = headerRowIndex + 1; i < rawData.length; i++) {
-                const fila = rawData[i];
-                if (!fila || fila.length === 0) continue;
+              for (const fila of data) {
+                // Buscamos claves sin importar mayúsculas/minúsculas ni espacios extra
+                const getCol = (possibleNames) => {
+                  const key = Object.keys(fila).find(k => 
+                    possibleNames.some(p => k.trim().toUpperCase() === p.toUpperCase())
+                  );
+                  return key ? fila[key] : null;
+                };
 
-                const tipRaw = getStr(fila, ['TIP']);
-                const nombreRaw = getStr(fila, ['NOMBRE']);
+                const tipRaw = getCol(['TIP']);
+                const nombreRaw = getCol(['NOMBRE']);
 
                 if (!tipRaw || !nombreRaw) continue;
 
@@ -143,40 +127,48 @@
 
                 const tipStr = String(tipClean).padStart(3, '0');
                 
-                let usuarioWin = getStr(fila, ['USUARIO WINDOWS', 'USUARIO']).toLowerCase();
-                if (!usuarioWin) usuarioWin = `policia${tipStr}`;
+                const usuarioWinRaw = getCol(['USUARIO WINDOWS', 'USUARIO']);
+                const usuarioWin = usuarioWinRaw 
+                  ? String(usuarioWinRaw).toLowerCase().trim() 
+                  : `policia${tipStr}`;
 
                 const docKey = `${usuarioWin}@policiaportuaria.local`;
 
+                const parseNum = (val) => {
+                  const n = Number(val);
+                  return isNaN(n) ? 0 : n;
+                };
+
+                // Mapeo exacto por nombre de columna
                 await window.fbDb.setDoc(window.fbDb.doc(window.db, "policias", docKey), {
-                  nombre: nombreRaw,
+                  nombre: String(nombreRaw).trim(),
                   tip: tipStr,
                   usuarioWindows: usuarioWin,
                   saldos: {
                     vacaciones: {
-                      totales: getVal(fila, ['VACACIONES_T', 'VAC_T', 'VACACIONES T']),
-                      usados: getVal(fila, ['VACACIONES_U', 'VAC_U', 'VACACIONES U']),
-                      pendientes: getVal(fila, ['VACACIONES_P', 'VAC_P', 'VACACIONES P'])
+                      totales: parseNum(getCol(['VACACIONES_T', 'VACACIONES T'])),
+                      usados: parseNum(getCol(['VACACIONES_U', 'VACACIONES U'])),
+                      pendientes: parseNum(getCol(['VACACIONES_P', 'VACACIONES P']))
                     },
                     asuntosPropios: {
-                      totales: getVal(fila, ['PROPIOS_T', 'PROP_T', 'PROPIOS T']),
-                      usados: getVal(fila, ['PROPIOS_U', 'PROP_U', 'PROPIOS U']),
-                      pendientes: getVal(fila, ['PROPIOS_P', 'PROP_P', 'PROPIOS P'])
+                      totales: parseNum(getCol(['PROPIOS_T', 'PROPIOS T'])),
+                      usados: parseNum(getCol(['PROPIOS_U', 'PROPIOS U'])),
+                      pendientes: parseNum(getCol(['PROPIOS_P', 'PROPIOS P']))
                     },
                     convenio: {
-                      totales: getVal(fila, ['DISPONIBLE_T', 'DISP_T', 'DISPONIBLE T']),
-                      usados: getVal(fila, ['DISPONIBLE_U', 'DISP_U', 'DISPONIBLE U']),
-                      pendientes: getVal(fila, ['DISPONIBLE_P', 'DISP_P', 'DISPONIBLE P'])
+                      totales: parseNum(getCol(['DISPONIBLE_T', 'DISPONIBLE T'])),
+                      usados: parseNum(getCol(['DISPONIBLE_U', 'DISPONIBLE U'])),
+                      pendientes: parseNum(getCol(['DISPONIBLE_P', 'DISPONIBLE P']))
                     },
-                    vacAdicionales: getVal(fila, ['VAC_ADIC_P', 'VAC_ADIC', 'VACACIONES ADICIONALES', 'ADICIONALES']),
-                    diasAnteriores: getVal(fila, ['ANTERIOR_P', 'ANTERIOR', 'ANTERIORES']),
-                    jornadaVerano: getVal(fila, ['VERANO_P', 'VERANO']),
+                    vacAdicionales: parseNum(getCol(['VAC_ADIC_P', 'VAC_ADIC', 'VACACIONES ADICIONALES'])),
+                    diasAnteriores: parseNum(getCol(['ANTERIOR_P', 'ANTERIOR'])),
+                    jornadaVerano: parseNum(getCol(['VERANO_P', 'VERANO'])),
                     fiestasEspeciales: {
-                      julio16: getVal(fila, ['JULIO16_P', 'JULIO16', '16 JULIO']),
-                      diciembre24: getVal(fila, ['DICIEMBRE24_P', 'DICIEMBRE24', '24 DICIEMBRE']),
-                      diciembre31: getVal(fila, ['DICIEMBRE31_P', 'DICIEMBRE31', '31 DICIEMBRE'])
+                      julio16: parseNum(getCol(['JULIO16_P', 'JULIO16'])),
+                      diciembre24: parseNum(getCol(['DICIEMBRE24_P', 'DICIEMBRE24'])),
+                      diciembre31: parseNum(getCol(['DICIEMBRE31_P', 'DICIEMBRE31']))
                     },
-                    totalGlobal: getVal(fila, ['TOTAL_P', 'TOTAL P', 'TOTAL PENDIENTE', 'TOTAL'])
+                    totalGlobal: parseNum(getCol(['TOTAL_P', 'TOTAL P', 'TOTAL PENDIENTE', 'TOTAL']))
                   },
                   ultimaActualizacion: new Date().toLocaleDateString('es-ES')
                 }, { merge: true });
@@ -184,7 +176,7 @@
                 guardados++;
               }
 
-              alert(`¡Éxito! Se han importado correctamente ${guardados} agentes con todos los desgloses.`);
+              alert(`¡Éxito! Se han importado correctamente ${guardados} agentes con sus saldos exactos.`);
               window.location.reload();
             } catch (err) {
               alert("Error procesando el Excel: " + err.message);
