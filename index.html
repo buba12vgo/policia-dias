@@ -55,15 +55,12 @@
         const [subiendoExcel, setSubiendoExcel] = useState(false);
         const [darkMode, setDarkMode] = useState(true);
         
-        // Estado para el panel de Admin
         const [listaAgentes, setListaAgentes] = useState([]);
         const [busquedaAdmin, setBusquedaAdmin] = useState('');
         const [agenteSeleccionadoAdmin, setAgenteSeleccionadoAdmin] = useState(null);
         
-        // Estado para el selector del mes de nómina
         const [mesNominaSeleccionado, setMesNominaSeleccionado] = useState('');
 
-        // Control de tema claro / oscuro
         useEffect(() => {
           if (darkMode) {
             document.documentElement.classList.add('dark');
@@ -127,8 +124,8 @@
           }
         };
 
-        // Actualizar el selector de mes automáticamente al ver un agente nuevo
         const agenteMostrado = agente || agenteSeleccionadoAdmin;
+        
         useEffect(() => {
           if (agenteMostrado?.historicoNominas) {
             const mesesDisponibles = Object.keys(agenteMostrado.historicoNominas);
@@ -141,7 +138,6 @@
           }
         }, [agenteMostrado]);
 
-        // SUBIR EXCEL DE SALDOS DE DÍAS
         const handleExcelSaldosUpload = async (e) => {
           const file = e.target.files[0];
           if (!file) return;
@@ -156,7 +152,7 @@
               const sheetTotal = wb.Sheets['TOTAL'];
 
               if (!sheetTotal) {
-                alert("Error: No se encontró la pestaña 'TOTAL' en el Excel.");
+                alert("Error: No se encontró la pestaña 'TOTAL'.");
                 setSubiendoExcel(false);
                 return;
               }
@@ -223,7 +219,6 @@
                 }, { merge: true });
                 guardados++;
               }
-
               alert(`¡Éxito! Importados ${guardados} agentes con Saldos de Días.`);
               cargarAgentesAdmin();
             } catch (err) {
@@ -234,7 +229,7 @@
           reader.readAsBinaryString(file);
         };
 
-        // SUBIR EXCEL DE NÓMINA (CHUPANDO TODAS LAS PESTAÑAS)
+        // SUBIR EXCEL DE NÓMINA (CON BUSCADOR DINÁMICO DE COLUMNAS)
         const handleExcelNominaUpload = async (e) => {
           const file = e.target.files[0];
           if (!file) return;
@@ -247,7 +242,6 @@
               const bstr = evt.target.result;
               const wb = XLSX.read(bstr, { type: 'binary' });
 
-              // Extraemos TODAS las pestañas que correspondan a meses
               const hojasMeses = wb.SheetNames.filter(s => MESES_ORDEN.some(m => s.toLowerCase().includes(m.toLowerCase())));
               
               if (hojasMeses.length === 0) {
@@ -265,12 +259,37 @@
                 const sheet = wb.Sheets[sheetName];
                 const rawData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
 
-                for (const fila of rawData) {
+                // BUSCAR DÓNDE ESTÁN LAS CABECERAS REALES
+                let headerRowIndex = rawData.findIndex(row => row && row.some(cell => typeof cell === 'string' && cell.toUpperCase().includes('FESTIVO')));
+                if (headerRowIndex === -1) headerRowIndex = 0; // Backup
+                
+                const headers = rawData[headerRowIndex].map(h => String(h || '').trim().toUpperCase());
+
+                // Funciones para buscar la posición exacta de cada columna
+                const getColIdx = (keywords) => headers.findIndex(h => keywords.some(k => h.includes(k)));
+
+                const idxDisp = getColIdx(['DISPONIBLE', 'DISP']);
+                const idxViernes = getColIdx(['VIERNES']);
+                const idxSabM = getColIdx(['SÁBADOS M', 'SABADO M', 'SÁBADO M', 'MAÑANA']);
+                const idxSabT = getColIdx(['SÁBADOS T', 'SABADO T', 'SÁBADO T', 'TARDE']);
+                const idxFest = getColIdx(['FESTIVO']);
+                const idxObs = getColIdx(['OBSERVACION', 'OBSERVACIONES']);
+
+                for (let i = headerRowIndex + 1; i < rawData.length; i++) {
+                  const fila = rawData[i];
                   if (!fila || fila.length < 2) continue;
 
-                  const colNombre = String(fila[1] || '');
-                  const matchTip = colNombre.match(/\[(\d+)\]/);
+                  // Extraer nombre y TIP independientemente de la columna
+                  let colNombre = '';
+                  for(let cell of fila) {
+                    if (typeof cell === 'string' && cell.match(/\[(\d+)\]/)) {
+                      colNombre = cell;
+                      break;
+                    }
+                  }
+                  if (!colNombre) colNombre = String(fila[1] || '');
 
+                  const matchTip = colNombre.match(/\[(\d+)\]/);
                   if (!matchTip) continue;
 
                   const tipClean = Math.floor(Number(matchTip[1]));
@@ -282,21 +301,27 @@
                     agentesData[tipStr] = { nombre: nombreLimpio, historicoNominas: {} };
                   }
 
-                  const parseNum = (val) => { const n = Number(val); return isNaN(n) ? 0 : n; };
+                  // Parser de números a prueba de balas (comas, espacios, etc)
+                  const parseNumSeguro = (idx, fallbackIdx) => {
+                    const finalIdx = idx !== -1 ? idx : fallbackIdx;
+                    if (finalIdx === -1 || fila[finalIdx] === undefined || fila[finalIdx] === null) return 0;
+                    const valStr = String(fila[finalIdx]).trim().replace(',', '.');
+                    const n = Number(valStr);
+                    return isNaN(n) ? 0 : n;
+                  };
 
                   agentesData[tipStr].historicoNominas[mesLimpio] = {
                     mes: mesLimpio,
-                    disponibles: parseNum(fila[2]),
-                    viernesNoche: parseNum(fila[3]),
-                    sabadosManana: parseNum(fila[4]),
-                    sabadosTarde: parseNum(fila[5]),
-                    festivos: parseNum(fila[6]),
-                    observaciones: fila[7] ? String(fila[7]).trim() : ''
+                    disponibles: parseNumSeguro(idxDisp, 2),
+                    viernesNoche: parseNumSeguro(idxViernes, 3),
+                    sabadosManana: parseNumSeguro(idxSabM, 4),
+                    sabadosTarde: parseNumSeguro(idxSabT, 5),
+                    festivos: parseNumSeguro(idxFest, 6), // <- Aquí estaba el fallo al leer fijamente la col 6
+                    observaciones: (idxObs !== -1 && fila[idxObs]) ? String(fila[idxObs]).trim() : (fila[7] ? String(fila[7]).trim() : '')
                   };
                 }
               }
 
-              // Mapeo para no pisar correos antiguos si ya existen
               const querySnapshot = await window.fbDb.getDocs(window.fbDb.collection(window.db, "policias"));
               const tipToDocKey = {};
               querySnapshot.forEach((docSnap) => {
@@ -311,7 +336,7 @@
                 await window.fbDb.setDoc(window.fbDb.doc(window.db, "policias", docKeyFound), {
                   nombre: dataToSave.nombre,
                   tip: tipStr,
-                  historicoNominas: dataToSave.historicoNominas, // Guarda todo el mapa de meses
+                  historicoNominas: dataToSave.historicoNominas,
                   ultimaActualizacionNomina: fechaHoraStr
                 }, { merge: true });
                 guardados++;
@@ -349,41 +374,23 @@
                 <form onSubmit={handleLogin} className="space-y-4">
                   <div>
                     <label className="block text-xs font-semibold text-slate-300 uppercase mb-1">Usuario de Windows</label>
-                    <input 
-                      type="text" 
-                      placeholder="Ej: adurher"
-                      value={usuarioInput}
-                      onChange={(e) => setUsuarioInput(e.target.value)}
-                      className="w-full p-3 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
-                    />
+                    <input type="text" placeholder="Ej: adurher" value={usuarioInput} onChange={(e) => setUsuarioInput(e.target.value)} className="w-full p-3 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-amber-500" />
                   </div>
 
                   <div>
                     <label className="block text-xs font-semibold text-slate-300 uppercase mb-1">Contraseña (TIP 3 Dígitos)</label>
-                    <input 
-                      type="password" 
-                      placeholder="Ej: 166"
-                      value={passwordInput}
-                      onChange={(e) => setPasswordInput(e.target.value)}
-                      className="w-full p-3 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
-                    />
+                    <input type="password" placeholder="Ej: 166" value={passwordInput} onChange={(e) => setPasswordInput(e.target.value)} className="w-full p-3 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-amber-500" />
                   </div>
 
                   {errorLogin && <p className="text-red-400 text-xs text-center font-medium">{errorLogin}</p>}
 
-                  <button 
-                    type="submit" 
-                    className="w-full bg-slate-700 hover:bg-amber-600 text-white font-bold py-3 rounded-lg transition duration-200 shadow-md border border-slate-600 hover:border-amber-500"
-                  >
+                  <button type="submit" className="w-full bg-slate-700 hover:bg-amber-600 text-white font-bold py-3 rounded-lg transition duration-200 shadow-md border border-slate-600 hover:border-amber-500">
                     Consultar Mis Datos
                   </button>
                 </form>
 
                 <div className="mt-6 text-center">
-                  <button 
-                    onClick={() => setDarkMode(!darkMode)} 
-                    className="text-xs text-slate-400 hover:text-amber-400 transition"
-                  >
+                  <button onClick={() => setDarkMode(!darkMode)} className="text-xs text-slate-400 hover:text-amber-400 transition">
                     {darkMode ? '☀️ Cambiar a Modo Claro' : '🌙 Cambiar a Modo Oscuro'}
                   </button>
                 </div>
@@ -396,9 +403,7 @@
           <div className="min-h-screen pb-12">
             <nav className="bg-slate-900 text-white px-6 py-4 shadow-lg flex justify-between items-center border-b border-slate-800 print:hidden">
               <div className="flex items-center space-x-3">
-                <div className="w-10 h-10 bg-slate-800 rounded-full border border-amber-500 flex items-center justify-center text-lg shadow">
-                  ⚓
-                </div>
+                <div className="w-10 h-10 bg-slate-800 rounded-full border border-amber-500 flex items-center justify-center text-lg shadow">⚓</div>
                 <div>
                   <h1 className="font-bold text-base leading-tight tracking-wide">POLICÍA PORTUARIA</h1>
                   <p className="text-[11px] text-amber-400 font-medium">Puerto de Vigo · Consulta 2026</p>
@@ -406,18 +411,10 @@
               </div>
 
               <div className="flex items-center space-x-3">
-                <button 
-                  onClick={() => setDarkMode(!darkMode)}
-                  className="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-amber-400 text-sm border border-slate-700"
-                  title="Cambiar tema"
-                >
+                <button onClick={() => setDarkMode(!darkMode)} className="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-amber-400 text-sm border border-slate-700" title="Cambiar tema">
                   {darkMode ? '☀️' : '🌙'}
                 </button>
-
-                <button 
-                  onClick={() => window.location.reload()}
-                  className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-2 rounded-md transition border border-slate-700"
-                >
+                <button onClick={() => window.location.reload()} className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-2 rounded-md transition border border-slate-700">
                   Desconectar
                 </button>
               </div>
@@ -446,23 +443,12 @@
                   </div>
 
                   <div className="pt-2 border-t border-slate-700">
-                    <input 
-                      type="text" 
-                      placeholder="🔍 Buscar agente por TIP, Nombre o Usuario..."
-                      value={busquedaAdmin}
-                      onChange={(e) => setBusquedaAdmin(e.target.value)}
-                      className="w-full p-2.5 bg-slate-900 border border-slate-600 rounded-lg text-sm text-white placeholder-slate-400 focus:outline-none focus:border-amber-500"
-                    />
-
+                    <input type="text" placeholder="🔍 Buscar agente por TIP, Nombre o Usuario..." value={busquedaAdmin} onChange={(e) => setBusquedaAdmin(e.target.value)} className="w-full p-2.5 bg-slate-900 border border-slate-600 rounded-lg text-sm text-white placeholder-slate-400 focus:outline-none focus:border-amber-500" />
                     {busquedaAdmin && (
                       <div className="mt-2 bg-slate-900 border border-slate-700 rounded-lg max-h-48 overflow-y-auto divide-y divide-slate-800">
                         {agentesFiltrados.length > 0 ? (
                           agentesFiltrados.map((a) => (
-                            <div 
-                              key={a.tip} 
-                              onClick={() => { setAgenteSeleccionadoAdmin(a); setBusquedaAdmin(''); }}
-                              className="p-2.5 hover:bg-slate-800 cursor-pointer flex justify-between items-center text-xs"
-                            >
+                            <div key={a.tip} onClick={() => { setAgenteSeleccionadoAdmin(a); setBusquedaAdmin(''); }} className="p-2.5 hover:bg-slate-800 cursor-pointer flex justify-between items-center text-xs">
                               <span className="font-bold text-slate-200">{a.nombre}</span>
                               <span className="bg-amber-900/60 text-amber-300 px-2 py-0.5 rounded border border-amber-700/50">TIP: {a.tip}</span>
                             </div>
@@ -492,16 +478,12 @@
                         Última act. Nómina: <span className="font-medium text-amber-600 dark:text-amber-400">{agenteMostrado.ultimaActualizacionNomina || 'S/D'}</span>
                       </div>
 
-                      <button 
-                        onClick={() => window.print()}
-                        className="text-xs bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-600 flex items-center gap-1.5 transition print:hidden"
-                      >
+                      <button onClick={() => window.print()} className="text-xs bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-600 flex items-center gap-1.5 transition print:hidden">
                         🖨️ Imprimir Resumen
                       </button>
                     </div>
                   </div>
 
-                  {/* BLOQUE DE HISTÓRICO DE NÓMINA (NUEVO CON DESPLEGABLE) */}
                   {agenteMostrado.historicoNominas && Object.keys(agenteMostrado.historicoNominas).length > 0 && (
                     <div className="bg-white dark:bg-slate-800 rounded-xl p-5 border-2 border-amber-500/40 shadow-sm space-y-4">
                       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-slate-200 dark:border-slate-700 pb-3 gap-3">
@@ -512,11 +494,7 @@
                         
                         <div className="flex items-center space-x-2">
                           <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Consultar mes:</span>
-                          <select 
-                            value={mesNominaSeleccionado} 
-                            onChange={(e) => setMesNominaSeleccionado(e.target.value)}
-                            className="bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-200 text-xs rounded-md p-1.5 focus:outline-none focus:border-amber-500 font-bold"
-                          >
+                          <select value={mesNominaSeleccionado} onChange={(e) => setMesNominaSeleccionado(e.target.value)} className="bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-200 text-xs rounded-md p-1.5 focus:outline-none focus:border-amber-500 font-bold">
                             {Object.keys(agenteMostrado.historicoNominas)
                               .sort((a, b) => MESES_ORDEN.indexOf(a) - MESES_ORDEN.indexOf(b))
                               .map(mes => (
@@ -530,27 +508,27 @@
                         <div className="space-y-4">
                           <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-center">
                             <div className="bg-slate-50 dark:bg-slate-900/60 p-3 rounded-lg border border-slate-100 dark:border-slate-700">
-                              <span className="block text-2xl font-black text-amber-500">{agenteMostrado.historicoNominas[mesNominaSeleccionado].festivos || 0}</span>
+                              <span className="block text-2xl font-black text-amber-500">{agenteMostrado.historicoNominas[mesNominaSeleccionado].festivos !== undefined ? agenteMostrado.historicoNominas[mesNominaSeleccionado].festivos : 0}</span>
                               <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase">Festivos</span>
                             </div>
 
                             <div className="bg-slate-50 dark:bg-slate-900/60 p-3 rounded-lg border border-slate-100 dark:border-slate-700">
-                              <span className="block text-2xl font-black text-indigo-400">{agenteMostrado.historicoNominas[mesNominaSeleccionado].viernesNoche || 0}</span>
+                              <span className="block text-2xl font-black text-indigo-400">{agenteMostrado.historicoNominas[mesNominaSeleccionado].viernesNoche !== undefined ? agenteMostrado.historicoNominas[mesNominaSeleccionado].viernesNoche : 0}</span>
                               <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase">Viernes Noche</span>
                             </div>
 
                             <div className="bg-slate-50 dark:bg-slate-900/60 p-3 rounded-lg border border-slate-100 dark:border-slate-700">
-                              <span className="block text-2xl font-black text-blue-400">{agenteMostrado.historicoNominas[mesNominaSeleccionado].sabadosManana || 0}</span>
+                              <span className="block text-2xl font-black text-blue-400">{agenteMostrado.historicoNominas[mesNominaSeleccionado].sabadosManana !== undefined ? agenteMostrado.historicoNominas[mesNominaSeleccionado].sabadosManana : 0}</span>
                               <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase">Sábados Mañana</span>
                             </div>
 
                             <div className="bg-slate-50 dark:bg-slate-900/60 p-3 rounded-lg border border-slate-100 dark:border-slate-700">
-                              <span className="block text-2xl font-black text-blue-500">{agenteMostrado.historicoNominas[mesNominaSeleccionado].sabadosTarde || 0}</span>
+                              <span className="block text-2xl font-black text-blue-500">{agenteMostrado.historicoNominas[mesNominaSeleccionado].sabadosTarde !== undefined ? agenteMostrado.historicoNominas[mesNominaSeleccionado].sabadosTarde : 0}</span>
                               <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase">Sábados Tarde</span>
                             </div>
 
                             <div className="bg-slate-50 dark:bg-slate-900/60 p-3 rounded-lg border border-slate-100 dark:border-slate-700 col-span-2 sm:col-span-1">
-                              <span className="block text-2xl font-black text-emerald-400">{agenteMostrado.historicoNominas[mesNominaSeleccionado].disponibles || 0}</span>
+                              <span className="block text-2xl font-black text-emerald-400">{agenteMostrado.historicoNominas[mesNominaSeleccionado].disponibles !== undefined ? agenteMostrado.historicoNominas[mesNominaSeleccionado].disponibles : 0}</span>
                               <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase">Disponibles</span>
                             </div>
                           </div>
@@ -566,7 +544,6 @@
                     </div>
                   )}
 
-                  {/* BLOQUE DE SALDOS DE DÍAS Y VACACIONES */}
                   <div className="bg-gradient-to-r from-slate-900 via-blue-950 to-slate-900 text-white p-6 rounded-xl shadow-md flex justify-around items-center text-center border-t-2 border-amber-500">
                     <div>
                       <span className="block text-5xl font-black text-amber-400">{agenteMostrado.saldos?.totalGlobal || 0}</span>
