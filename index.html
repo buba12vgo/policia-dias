@@ -61,6 +61,13 @@
         
         const [mesNominaSeleccionado, setMesNominaSeleccionado] = useState('');
 
+        // Estados para el Modal de Contraseña
+        const [showPassModal, setShowPassModal] = useState(false);
+        const [passActual, setPassActual] = useState('');
+        const [passNueva, setPassNueva] = useState('');
+        const [passRepetida, setPassRepetida] = useState('');
+        const [msgPass, setMsgPass] = useState({ text: '', type: '' });
+
         useEffect(() => {
           if (darkMode) {
             document.documentElement.classList.add('dark');
@@ -89,12 +96,12 @@
           e.preventDefault();
           setErrorLogin('');
           if (!usuarioInput || !passwordInput) {
-            setErrorLogin('Introduce tu usuario y tu TIP de 3 dígitos');
+            setErrorLogin('Introduce tu usuario y tu contraseña');
             return;
           }
 
           const usuarioClean = usuarioInput.toLowerCase().trim();
-          const tipInput = passwordInput.trim().padStart(3, '0');
+          const inputPass = passwordInput.trim();
 
           if (usuarioClean === 'rromdur') {
             setUserSession({ usuario: 'rromdur', isAdmin: true });
@@ -110,11 +117,17 @@
 
             if (docSnap.exists()) {
               const dataAgente = docSnap.data();
-              if (String(dataAgente.tip).padStart(3, '0') === tipInput) {
+              const tipAgente = String(dataAgente.tip).padStart(3, '0');
+              const passReal = dataAgente.passwordPersonal || tipAgente;
+
+              // Validamos: O coincide la contraseña personalizada, o coincide el TIP rellenado a 3 ceros si no ha cambiado la clave
+              const esValido = (inputPass === passReal) || (!dataAgente.passwordPersonal && inputPass.padStart(3, '0') === tipAgente);
+
+              if (esValido) {
                 setAgente(dataAgente);
                 setUserSession({ usuario: usuarioClean, isAdmin: false });
               } else {
-                setErrorLogin('La TIP / contraseña introducida no es correcta.');
+                setErrorLogin('La contraseña introducida no es correcta.');
               }
             } else {
               setErrorLogin('Usuario de Windows no encontrado en el sistema.');
@@ -137,6 +150,53 @@
             }
           }
         }, [agenteMostrado]);
+
+        const cambiarPassword = async (e) => {
+          e.preventDefault();
+          setMsgPass({ text: '', type: '' });
+
+          if (passNueva.length < 3) {
+            setMsgPass({ text: 'La contraseña debe tener al menos 3 caracteres.', type: 'error' });
+            return;
+          }
+
+          if (passNueva !== passRepetida) {
+            setMsgPass({ text: 'Las contraseñas nuevas no coinciden.', type: 'error' });
+            return;
+          }
+
+          const tipAgente = String(agente.tip).padStart(3, '0');
+          const passRealActual = agente.passwordPersonal || tipAgente;
+          const inputPassActual = passActual.trim();
+
+          const actualValida = (inputPassActual === passRealActual) || (!agente.passwordPersonal && inputPassActual.padStart(3, '0') === tipAgente);
+
+          if (!actualValida) {
+            setMsgPass({ text: 'La contraseña actual es incorrecta.', type: 'error' });
+            return;
+          }
+
+          try {
+            const docKey = `${agente.usuarioWindows}@policiaportuaria.local`;
+            await window.fbDb.setDoc(window.fbDb.doc(window.db, "policias", docKey), {
+              passwordPersonal: passNueva.trim()
+            }, { merge: true });
+
+            setAgente({ ...agente, passwordPersonal: passNueva.trim() });
+            setMsgPass({ text: '¡Contraseña actualizada con éxito!', type: 'success' });
+            
+            setTimeout(() => {
+              setShowPassModal(false);
+              setPassActual('');
+              setPassNueva('');
+              setPassRepetida('');
+              setMsgPass({ text: '', type: '' });
+            }, 2000);
+
+          } catch (err) {
+            setMsgPass({ text: 'Error al actualizar: ' + err.message, type: 'error' });
+          }
+        };
 
         const handleExcelSaldosUpload = async (e) => {
           const file = e.target.files[0];
@@ -229,7 +289,6 @@
           reader.readAsBinaryString(file);
         };
 
-        // SUBIR EXCEL DE NÓMINA (CON BLINDAJE CONTRA COLUMNAS VACÍAS)
         const handleExcelNominaUpload = async (e) => {
           const file = e.target.files[0];
           if (!file) return;
@@ -259,14 +318,11 @@
                 const sheet = wb.Sheets[sheetName];
                 const rawData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
 
-                // BUSCAR DÓNDE ESTÁN LAS CABECERAS REALES BLINDADO
                 let headerRowIndex = rawData.findIndex(row => row && row.some(cell => typeof cell === 'string' && cell.toUpperCase().includes('FESTIVO')));
-                if (headerRowIndex === -1) headerRowIndex = 0; // Backup
+                if (headerRowIndex === -1) headerRowIndex = 0; 
                 
-                // Array.from asegura que si el Excel tiene "huecos invisibles", se transformen en strings vacíos sin petar
                 const headers = Array.from(rawData[headerRowIndex] || []).map(h => String(h || '').trim().toUpperCase());
 
-                // Funciones para buscar la posición exacta de cada columna (comprobando que h existe)
                 const getColIdx = (keywords) => headers.findIndex(h => h && keywords.some(k => h.includes(k)));
 
                 const idxDisp = getColIdx(['DISPONIBLE', 'DISP']);
@@ -377,7 +433,7 @@
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-300 uppercase mb-1">Contraseña (TIP 3 Dígitos)</label>
+                    <label className="block text-xs font-semibold text-slate-300 uppercase mb-1">Contraseña (Por defecto: TIP)</label>
                     <input type="password" placeholder="Ej: 166" value={passwordInput} onChange={(e) => setPasswordInput(e.target.value)} className="w-full p-3 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-amber-500" />
                   </div>
 
@@ -399,7 +455,46 @@
         }
 
         return (
-          <div className="min-h-screen pb-12">
+          <div className="min-h-screen pb-12 relative">
+            {showPassModal && (
+              <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+                <div className="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-2xl w-full max-w-sm border border-slate-200 dark:border-slate-700">
+                  <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-4 flex items-center gap-2">
+                    🔑 Cambiar Contraseña
+                  </h3>
+                  <form onSubmit={cambiarPassword} className="space-y-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">Contraseña Actual</label>
+                      <input type="password" value={passActual} onChange={(e) => setPassActual(e.target.value)} required className="w-full p-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:border-amber-500" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">Nueva Contraseña</label>
+                      <input type="password" value={passNueva} onChange={(e) => setPassNueva(e.target.value)} required className="w-full p-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:border-amber-500" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">Repetir Nueva Contraseña</label>
+                      <input type="password" value={passRepetida} onChange={(e) => setPassRepetida(e.target.value)} required className="w-full p-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:border-amber-500" />
+                    </div>
+                    
+                    {msgPass.text && (
+                      <p className={`text-xs font-bold text-center ${msgPass.type === 'error' ? 'text-red-500' : 'text-emerald-500'}`}>
+                        {msgPass.text}
+                      </p>
+                    )}
+
+                    <div className="flex gap-2 mt-4">
+                      <button type="button" onClick={() => setShowPassModal(false)} className="flex-1 bg-slate-200 hover:bg-slate-300 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-white font-bold py-2 rounded-lg transition">
+                        Cancelar
+                      </button>
+                      <button type="submit" className="flex-1 bg-amber-600 hover:bg-amber-500 text-white font-bold py-2 rounded-lg transition">
+                        Guardar
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            )}
+
             <nav className="bg-slate-900 text-white px-6 py-4 shadow-lg flex justify-between items-center border-b border-slate-800 print:hidden">
               <div className="flex items-center space-x-3">
                 <div className="w-10 h-10 bg-slate-800 rounded-full border border-amber-500 flex items-center justify-center text-lg shadow">⚓</div>
@@ -410,6 +505,11 @@
               </div>
 
               <div className="flex items-center space-x-3">
+                {!userSession.isAdmin && (
+                  <button onClick={() => setShowPassModal(true)} className="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-300 text-sm border border-slate-700" title="Cambiar Contraseña">
+                    🔑
+                  </button>
+                )}
                 <button onClick={() => setDarkMode(!darkMode)} className="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-amber-400 text-sm border border-slate-700" title="Cambiar tema">
                   {darkMode ? '☀️' : '🌙'}
                 </button>
