@@ -45,33 +45,11 @@
       function App() {
         const [user, setUser] = useState(null);
         const [agente, setAgente] = useState(null);
-        const [loading, setLoading] = useState(true);
+        const [loading, setLoading] = useState(false);
         const [usuarioInput, setUsuarioInput] = useState('');
         const [passwordInput, setPasswordInput] = useState('');
         const [errorLogin, setErrorLogin] = useState('');
         const [subiendoExcel, setSubiendoExcel] = useState(false);
-
-        useEffect(() => {
-          const checkAuth = setInterval(() => {
-            if (window.auth && window.fbAuth) {
-              clearInterval(checkAuth);
-              window.fbAuth.onAuthStateChanged(window.auth, async (currentUser) => {
-                if (currentUser) {
-                  setUser(currentUser);
-                  const docRef = window.fbDb.doc(window.db, "policias", currentUser.email.toLowerCase().trim());
-                  const docSnap = await window.fbDb.getDoc(docRef);
-                  if (docSnap.exists()) {
-                    setAgente(docSnap.data());
-                  }
-                } else {
-                  setUser(null);
-                  setAgente(null);
-                }
-                setLoading(false);
-              });
-            }
-          }, 100);
-        }, []);
 
         const handleLogin = async (e) => {
           e.preventDefault();
@@ -82,21 +60,32 @@
           }
 
           const usuarioClean = usuarioInput.toLowerCase().trim();
-          const passClean = passwordInput.trim().padStart(3, '0');
+          const tipInput = passwordInput.trim().padStart(3, '0');
 
-          // BYPASS ADMIN DIRECTO PARA PRIMERA CARGA
+          // ACCESO DIRECTO ADMIN PARA RUBÉN
           if (usuarioClean === 'rromdur') {
             setUser({ email: 'rromdur@policiaportuaria.local', uid: 'admin-root' });
-            setLoading(false);
             return;
           }
 
           const emailTech = `${usuarioClean}@policiaportuaria.local`;
+          // Formateamos la contraseña a mínimo 6 caracteres internamente (ej: 166 -> 166166)
+          const passTech = tipInput + tipInput;
 
           try {
-            await window.fbAuth.signInWithEmailAndPassword(window.auth, emailTech, passClean);
+            await window.fbAuth.signInWithEmailAndPassword(window.auth, emailTech, passTech);
+            setUser({ email: emailTech });
+            
+            // Buscar datos del agente en Firestore
+            const docRef = window.fbDb.doc(window.db, "policias", emailTech);
+            const docSnap = await window.fbDb.getDoc(docRef);
+            if (docSnap.exists()) {
+              setAgente(docSnap.data());
+            } else {
+              setErrorLogin('Usuario autenticado pero sin datos de días cargados.');
+            }
           } catch (err) {
-            setErrorLogin('Usuario o contraseña/TIP incorrectos. (Sube primero la plantilla)');
+            setErrorLogin('Usuario o contraseña/TIP incorrectos. Revisa los datos.');
           }
         };
 
@@ -120,22 +109,31 @@
               }
 
               const data = XLSX.utils.sheet_to_json(sheetTotal);
+              let creados = 0;
 
               for (const fila of data) {
                 if (!fila.NOMBRE || !fila.TIP) continue;
 
                 const tipStr = String(Math.floor(fila.TIP)).trim().padStart(3, '0');
+                
+                // Mapeo directo de la columna USUARIO WINDOWS
                 const usuarioWin = fila['USUARIO WINDOWS'] 
                   ? String(fila['USUARIO WINDOWS']).toLowerCase().trim() 
                   : `policia${tipStr}`;
 
                 const emailAuth = `${usuarioWin}@policiaportuaria.local`;
-                const passwordAuth = tipStr;
+                // Duplicamos el TIP para cumplir con el mínimo de 6 caracteres de Firebase (ej: 166166)
+                const passwordAuth = tipStr + tipStr;
 
+                // Crear cuenta en Firebase Auth
                 try {
                   await window.fbAuth.createUserWithEmailAndPassword(window.auth, emailAuth, passwordAuth);
-                } catch (err) {}
+                  creados++;
+                } catch (err) {
+                  // Si ya existe, no pasa nada
+                }
 
+                // Guardar saldos en Firestore
                 await window.fbDb.setDoc(window.fbDb.doc(window.db, "policias", emailAuth), {
                   nombre: fila.NOMBRE,
                   tip: tipStr,
@@ -170,7 +168,7 @@
                 }, { merge: true });
               }
 
-              alert("¡Excel cargado y usuarios sincronizados con éxito!");
+              alert("¡Sincronización completada con éxito!");
               window.location.reload();
             } catch (err) {
               alert("Error procesando el archivo: " + err.message);
@@ -206,7 +204,7 @@
                     <label className="block text-xs font-semibold text-slate-300 uppercase mb-1">Usuario de Windows</label>
                     <input 
                       type="text" 
-                      placeholder="Ej: estevez.ricardo"
+                      placeholder="Ej: adurher"
                       value={usuarioInput}
                       onChange={(e) => setUsuarioInput(e.target.value)}
                       className="w-full p-3 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
@@ -217,14 +215,14 @@
                     <label className="block text-xs font-semibold text-slate-300 uppercase mb-1">Contraseña (TIP 3 Dígitos)</label>
                     <input 
                       type="password" 
-                      placeholder="Ej: 021"
+                      placeholder="Ej: 166"
                       value={passwordInput}
                       onChange={(e) => setPasswordInput(e.target.value)}
                       className="w-full p-3 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
                     />
                   </div>
 
-                  {errorLogin && <p className="text-red-400 text-xs text-center">{errorLogin}</p>}
+                  {errorLogin && <p className="text-red-400 text-xs text-center font-medium">{errorLogin}</p>}
 
                   <button 
                     type="submit" 
@@ -309,28 +307,15 @@
                       <p className="text-xs text-slate-400 border-t pt-2 mt-2">Usados: {agente.saldos?.convenio?.usados || 0} de {agente.saldos?.convenio?.totales || 0}</p>
                     </div>
                   </div>
-
-                  <div className="bg-slate-800 text-white p-5 rounded-xl shadow-md mt-8">
-                    <h3 className="font-bold text-sm text-slate-200 mb-1">Zona Admin: Sincronizar Excel 2026</h3>
-                    <p className="text-xs text-slate-400 mb-3">Sube el archivo "2026 DIAS POLIPOR.xlsx" para actualizar los saldos globales de la plantilla.</p>
-                    <input 
-                      type="file" 
-                      accept=".xlsx, .xls"
-                      onChange={handleExcelUpload}
-                      disabled={subiendoExcel}
-                      className="block w-full text-xs text-slate-300 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-500 cursor-pointer"
-                    />
-                    {subiendoExcel && <p className="text-xs text-amber-400 mt-2 animate-pulse">Procesando plantilla e importando a Firestore...</p>}
-                  </div>
                 </>
               ) : (
                 <div className="bg-white p-6 rounded-xl text-center shadow-sm border border-slate-200">
-                  <h3 className="text-lg font-bold text-slate-900 mb-1">¡Acceso Root Administrador!</h3>
-                  <p className="text-slate-600 text-sm mb-4">Sube la plantilla para volcar y crear todos los usuarios en la base de datos.</p>
+                  <h3 className="text-lg font-bold text-slate-900 mb-1">Panel Administrador</h3>
+                  <p className="text-slate-600 text-sm mb-4">Sube la plantilla Excel para registrar y actualizar todos los usuarios en Firebase.</p>
                   
                   <div className="bg-slate-800 text-white p-5 rounded-xl text-left max-w-xl mx-auto shadow-md">
                     <h4 className="font-bold text-sm text-slate-200 mb-1">Cargar Plantilla Excel 2026</h4>
-                    <p className="text-xs text-slate-400 mb-3">Sube aquí tu archivo Excel para sincronizar la plantilla entera de golpe.</p>
+                    <p className="text-xs text-slate-400 mb-3">Sube el archivo para procesar las columnas y crear las credenciales automáticas.</p>
                     <input 
                       type="file" 
                       accept=".xlsx, .xls"
@@ -338,7 +323,7 @@
                       disabled={subiendoExcel}
                       className="block w-full text-xs text-slate-300 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-500 cursor-pointer"
                     />
-                    {subiendoExcel && <p className="text-xs text-amber-400 mt-2 animate-pulse">Procesando e importando usuarios a Firebase...</p>}
+                    {subiendoExcel && <p className="text-xs text-amber-400 mt-2 animate-pulse">Creando cuentas e importando saldos a Firebase...</p>}
                   </div>
                 </div>
               )}
