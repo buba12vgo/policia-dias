@@ -39,45 +39,6 @@
     <script type="text/babel">
       const { useState } = React;
 
-      // Componente del Escudo Oficial estilizado (Placa + Ancla + Estrella)
-      function EscudoPolice({ className = "w-12 h-12" }) {
-        return (
-          <div className={`relative flex items-center justify-center ${className}`}>
-            <svg viewBox="0 0 100 120" className="w-full h-full drop-shadow-md">
-              <!-- Base Escudo / Placa -->
-              <path 
-                d="M50 5 L90 20 V60 C90 85 50 112 50 112 C50 112 10 85 10 60 V20 Z" 
-                fill="#1e293b" 
-                stroke="#d97706" 
-                strokeWidth="4"
-              />
-              <!-- Borde interior dorado -->
-              <path 
-                d="M50 12 L83 25 V57 C83 78 50 101 50 101 C50 101 17 78 17 57 V25 Z" 
-                fill="#0f172a" 
-                stroke="#fbbf24" 
-                strokeWidth="1.5"
-              />
-              <!-- Ancla Marítima Portuaria -->
-              <path 
-                d="M50 30 V75 M38 42 H62 M32 65 C32 78 68 78 68 65" 
-                stroke="#38bdf8" 
-                strokeWidth="3.5" 
-                strokeLinecap="round" 
-                fill="none"
-              />
-              <!-- Aro superior ancla -->
-              <circle cx="50" cy="30" r="4" stroke="#38bdf8" strokeWidth="2.5" fill="none" />
-              <!-- Estrella dorada central -->
-              <polygon 
-                points="50,48 53,56 61,56 54,61 57,69 50,64 43,69 46,61 39,56 47,56" 
-                fill="#fbbf24" 
-              />
-            </svg>
-          </div>
-        );
-      }
-
       function App() {
         const [userSession, setUserSession] = useState(null);
         const [agente, setAgente] = useState(null);
@@ -239,9 +200,11 @@
             <div className="min-h-screen bg-slate-900 text-slate-100 flex items-center justify-center p-4">
               <div className="bg-slate-800 p-8 rounded-2xl shadow-2xl w-full max-w-md border border-slate-700">
                 <div className="text-center mb-6 flex flex-col items-center">
-                  <EscudoPolice className="w-16 h-20 mb-2" />
-                  <h1 className="text-2xl font-bold tracking-tight text-white">POLICÍA PORTUARIA</h1>
-                  <p className="text-xs text-amber-500 font-semibold uppercase tracking-widest mt-1">Autoridad Portuaria de Vigo</p>
+                  <div className="w-16 h-16 bg-slate-900 rounded-full border-2 border-amber-500 flex items-center justify-center mb-3 shadow-lg">
+                    <span className="text-2xl">⚓</span>
+                  </div>
+                  <h1 className="text-2xl font-black tracking-wider text-white">POLICÍA PORTUARIA</h1>
+                  <p className="text-xs text-amber-500 font-bold uppercase tracking-widest mt-1">Autoridad Portuaria de Vigo</p>
                   <p className="text-[11px] text-slate-400 mt-2">Consulta Individual de Permisos 2026</p>
                 </div>
 
@@ -286,7 +249,9 @@
           <div className="min-h-screen bg-slate-100 text-slate-800 pb-12">
             <nav className="bg-slate-900 text-white px-6 py-4 shadow-lg flex justify-between items-center border-b border-slate-800">
               <div className="flex items-center space-x-3">
-                <EscudoPolice className="w-9 h-11" />
+                <div className="w-10 h-10 bg-slate-800 rounded-full border border-amber-500 flex items-center justify-center text-lg shadow">
+                  ⚓
+                </div>
                 <div>
                   <h1 className="font-bold text-base leading-tight tracking-wide">POLICÍA PORTUARIA</h1>
                   <p className="text-[11px] text-amber-400 font-medium">Puerto de Vigo · Saldos 2026</p>
@@ -316,7 +281,6 @@
                     </div>
                   </div>
 
-                  {/* BANNER TOTAL CON COLOR CORPORATIVO AZUL MARINO/DORADO */}
                   <div className="bg-gradient-to-r from-slate-900 via-blue-950 to-slate-900 text-white p-6 rounded-xl shadow-md flex justify-around items-center text-center border-t-2 border-amber-500">
                     <div>
                       <span className="block text-5xl font-black text-amber-400">{agente.saldos?.totalGlobal || 0}</span>
@@ -324,7 +288,6 @@
                     </div>
                   </div>
 
-                  {/* BLOQUE PRINCIPAL (3 TARJETAS) */}
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
                       <span className="text-xs font-bold text-blue-600 uppercase tracking-wider bg-blue-50 px-2 py-0.5 rounded">Vacaciones</span>
@@ -354,7 +317,6 @@
                     </div>
                   </div>
 
-                  {/* BLOQUE ADICIONALES Y FIESTAS */}
                   <div className="bg-white rounded-xl p-5 border border-slate-200 shadow-sm space-y-4">
                     <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 border-b pb-2">Otros Saldos y Permisos Especiales</h3>
                     
