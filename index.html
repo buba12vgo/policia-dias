@@ -44,6 +44,8 @@
     <script type="text/babel">
       const { useState, useEffect } = React;
 
+      const MESES_ORDEN = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+
       function App() {
         const [userSession, setUserSession] = useState(null);
         const [agente, setAgente] = useState(null);
@@ -57,6 +59,9 @@
         const [listaAgentes, setListaAgentes] = useState([]);
         const [busquedaAdmin, setBusquedaAdmin] = useState('');
         const [agenteSeleccionadoAdmin, setAgenteSeleccionadoAdmin] = useState(null);
+        
+        // Estado para el selector del mes de nómina
+        const [mesNominaSeleccionado, setMesNominaSeleccionado] = useState('');
 
         // Control de tema claro / oscuro
         useEffect(() => {
@@ -122,7 +127,21 @@
           }
         };
 
-        // SUBIR EXCEL DE SALDOS DE DÍAS (El tradicional)
+        // Actualizar el selector de mes automáticamente al ver un agente nuevo
+        const agenteMostrado = agente || agenteSeleccionadoAdmin;
+        useEffect(() => {
+          if (agenteMostrado?.historicoNominas) {
+            const mesesDisponibles = Object.keys(agenteMostrado.historicoNominas);
+            mesesDisponibles.sort((a, b) => MESES_ORDEN.indexOf(a) - MESES_ORDEN.indexOf(b));
+            if (mesesDisponibles.length > 0) {
+              setMesNominaSeleccionado(mesesDisponibles[mesesDisponibles.length - 1]);
+            } else {
+              setMesNominaSeleccionado('');
+            }
+          }
+        }, [agenteMostrado]);
+
+        // SUBIR EXCEL DE SALDOS DE DÍAS
         const handleExcelSaldosUpload = async (e) => {
           const file = e.target.files[0];
           if (!file) return;
@@ -144,7 +163,6 @@
 
               const data = XLSX.utils.sheet_to_json(sheetTotal);
               let guardados = 0;
-
               const ahora = new Date();
               const fechaHoraStr = `${ahora.toLocaleDateString('es-ES')} a las ${ahora.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}`;
 
@@ -165,18 +183,11 @@
                 if (isNaN(tipClean) || tipClean === 0) continue;
 
                 const tipStr = String(tipClean).padStart(3, '0');
-                
                 const usuarioWinRaw = getCol(['USUARIO WINDOWS', 'USUARIO']);
-                const usuarioWin = usuarioWinRaw 
-                  ? String(usuarioWinRaw).toLowerCase().trim() 
-                  : `policia${tipStr}`;
-
+                const usuarioWin = usuarioWinRaw ? String(usuarioWinRaw).toLowerCase().trim() : `policia${tipStr}`;
                 const docKey = `${usuarioWin}@policiaportuaria.local`;
 
-                const parseNum = (val) => {
-                  const n = Number(val);
-                  return isNaN(n) ? 0 : n;
-                };
+                const parseNum = (val) => { const n = Number(val); return isNaN(n) ? 0 : n; };
 
                 await window.fbDb.setDoc(window.fbDb.doc(window.db, "policias", docKey), {
                   nombre: String(nombreRaw).trim(),
@@ -210,7 +221,6 @@
                   },
                   ultimaActualizacion: fechaHoraStr
                 }, { merge: true });
-
                 guardados++;
               }
 
@@ -221,11 +231,10 @@
             }
             setSubiendoExcel(false);
           };
-
           reader.readAsBinaryString(file);
         };
 
-        // SUBIR EXCEL DE NÓMINA (El nuevo con las pestañas por meses)
+        // SUBIR EXCEL DE NÓMINA (CHUPANDO TODAS LAS PESTAÑAS)
         const handleExcelNominaUpload = async (e) => {
           const file = e.target.files[0];
           if (!file) return;
@@ -238,81 +247,83 @@
               const bstr = evt.target.result;
               const wb = XLSX.read(bstr, { type: 'binary' });
 
-              // Cogemos la última pestaña útil que tenga datos de meses
-              const mesesValidos = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
-              const sheetName = wb.SheetNames.slice().reverse().find(s => mesesValidos.some(m => s.toLowerCase().includes(m.toLowerCase()))) || wb.SheetNames[0];
+              // Extraemos TODAS las pestañas que correspondan a meses
+              const hojasMeses = wb.SheetNames.filter(s => MESES_ORDEN.some(m => s.toLowerCase().includes(m.toLowerCase())));
+              
+              if (hojasMeses.length === 0) {
+                alert("No se han encontrado pestañas con nombres de meses.");
+                setSubiendoExcel(false);
+                return;
+              }
 
-              const sheet = wb.Sheets[sheetName];
-              const rawData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-
-              let guardados = 0;
+              const agentesData = {};
               const ahora = new Date();
               const fechaHoraStr = `${ahora.toLocaleDateString('es-ES')} a las ${ahora.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}`;
 
-              for (const fila of rawData) {
-                if (!fila || fila.length < 2) continue;
+              for (const sheetName of hojasMeses) {
+                const mesLimpio = MESES_ORDEN.find(m => sheetName.toLowerCase().includes(m.toLowerCase())) || sheetName;
+                const sheet = wb.Sheets[sheetName];
+                const rawData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
 
-                // En el Excel de Nómina, el nombre viene formateado como "[102] ROMAN DURAN, RUBEN"
-                const colNombre = String(fila[1] || '');
-                const matchTip = colNombre.match(/\[(\d+)\]/);
+                for (const fila of rawData) {
+                  if (!fila || fila.length < 2) continue;
 
-                if (!matchTip) continue;
+                  const colNombre = String(fila[1] || '');
+                  const matchTip = colNombre.match(/\[(\d+)\]/);
 
-                const tipClean = Math.floor(Number(matchTip[1]));
-                if (isNaN(tipClean) || tipClean === 0) continue;
+                  if (!matchTip) continue;
 
-                const tipStr = String(tipClean).padStart(3, '0');
+                  const tipClean = Math.floor(Number(matchTip[1]));
+                  if (isNaN(tipClean) || tipClean === 0) continue;
+                  const tipStr = String(tipClean).padStart(3, '0');
+                  const nombreLimpio = colNombre.replace(/\[\d+\]/, '').trim();
 
-                // Extraer el nombre limpio
-                const nombreLimpio = colNombre.replace(/\[\d+\]/, '').trim();
-
-                const parseNum = (val) => {
-                  const n = Number(val);
-                  return isNaN(n) ? 0 : n;
-                };
-
-                const datosNomina = {
-                  mes: sheetName,
-                  disponibles: parseNum(fila[2]),
-                  viernesNoche: parseNum(fila[3]),
-                  sabadosManana: parseNum(fila[4]),
-                  sabadosTarde: parseNum(fila[5]),
-                  festivos: parseNum(fila[6]),
-                  observaciones: fila[7] ? String(fila[7]).trim() : ''
-                };
-
-                // Buscar documento por TIP en la lista
-                const querySnapshot = await window.fbDb.getDocs(window.fbDb.collection(window.db, "policias"));
-                let docKeyFound = null;
-
-                querySnapshot.forEach((docSnap) => {
-                  if (docSnap.data().tip === tipStr) {
-                    docKeyFound = docSnap.id;
+                  if (!agentesData[tipStr]) {
+                    agentesData[tipStr] = { nombre: nombreLimpio, historicoNominas: {} };
                   }
-                });
 
-                if (!docKeyFound) {
-                  docKeyFound = `policia${tipStr}@policiaportuaria.local`;
+                  const parseNum = (val) => { const n = Number(val); return isNaN(n) ? 0 : n; };
+
+                  agentesData[tipStr].historicoNominas[mesLimpio] = {
+                    mes: mesLimpio,
+                    disponibles: parseNum(fila[2]),
+                    viernesNoche: parseNum(fila[3]),
+                    sabadosManana: parseNum(fila[4]),
+                    sabadosTarde: parseNum(fila[5]),
+                    festivos: parseNum(fila[6]),
+                    observaciones: fila[7] ? String(fila[7]).trim() : ''
+                  };
                 }
+              }
+
+              // Mapeo para no pisar correos antiguos si ya existen
+              const querySnapshot = await window.fbDb.getDocs(window.fbDb.collection(window.db, "policias"));
+              const tipToDocKey = {};
+              querySnapshot.forEach((docSnap) => {
+                tipToDocKey[docSnap.data().tip] = docSnap.id;
+              });
+
+              let guardados = 0;
+              for (const tipStr in agentesData) {
+                const docKeyFound = tipToDocKey[tipStr] || `policia${tipStr}@policiaportuaria.local`;
+                const dataToSave = agentesData[tipStr];
 
                 await window.fbDb.setDoc(window.fbDb.doc(window.db, "policias", docKeyFound), {
-                  nombre: nombreLimpio,
+                  nombre: dataToSave.nombre,
                   tip: tipStr,
-                  nominaProxima: datosNomina,
+                  historicoNominas: dataToSave.historicoNominas, // Guarda todo el mapa de meses
                   ultimaActualizacionNomina: fechaHoraStr
                 }, { merge: true });
-
                 guardados++;
               }
 
-              alert(`¡Éxito! Importados ${guardados} registros de Nómina para el mes de [${sheetName}].`);
+              alert(`¡Éxito! Importado el histórico de ${hojasMeses.length} meses para ${guardados} agentes.`);
               cargarAgentesAdmin();
             } catch (err) {
               alert("Error procesando Excel de Nómina: " + err.message);
             }
             setSubiendoExcel(false);
           };
-
           reader.readAsBinaryString(file);
         };
 
@@ -321,8 +332,6 @@
           a.tip?.includes(busquedaAdmin) ||
           a.usuarioWindows?.toLowerCase().includes(busquedaAdmin.toLowerCase())
         );
-
-        const agenteMostrado = agente || agenteSeleccionadoAdmin;
 
         if (!userSession) {
           return (
@@ -420,30 +429,18 @@
                   <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                     <div>
                       <h3 className="text-lg font-bold text-amber-400">Panel de Administración</h3>
-                      <p className="text-xs text-slate-300">Actualiza los Saldos de Días o la Nómina del mes.</p>
+                      <p className="text-xs text-slate-300">Actualiza los Saldos de Días o el histórico de Nóminas.</p>
                     </div>
 
                     <div className="flex flex-wrap gap-2">
                       <label className="bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold py-2.5 px-3 rounded-lg cursor-pointer transition shadow border border-slate-500">
                         {subiendoExcel ? 'Procesando...' : '📂 Cargar Excel Saldos'}
-                        <input 
-                          type="file" 
-                          accept=".xlsx, .xls"
-                          onChange={handleExcelSaldosUpload}
-                          disabled={subiendoExcel}
-                          className="hidden"
-                        />
+                        <input type="file" accept=".xlsx, .xls" onChange={handleExcelSaldosUpload} disabled={subiendoExcel} className="hidden" />
                       </label>
 
                       <label className="bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold py-2.5 px-3 rounded-lg cursor-pointer transition shadow border border-amber-400">
                         {subiendoExcel ? 'Procesando...' : '💶 Cargar Excel Nómina'}
-                        <input 
-                          type="file" 
-                          accept=".xlsx, .xls"
-                          onChange={handleExcelNominaUpload}
-                          disabled={subiendoExcel}
-                          className="hidden"
-                        />
+                        <input type="file" accept=".xlsx, .xls" onChange={handleExcelNominaUpload} disabled={subiendoExcel} className="hidden" />
                       </label>
                     </div>
                   </div>
@@ -481,7 +478,6 @@
 
               {agenteMostrado ? (
                 <>
-                  {/* CABECERA CON DATOS DEL AGENTE */}
                   <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm p-5 border border-slate-200 dark:border-slate-700 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                     <div>
                       <span className="text-xs font-bold tracking-wider uppercase text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800 px-2.5 py-1 rounded-md">
@@ -505,48 +501,66 @@
                     </div>
                   </div>
 
-                  {/* BLOQUE DE PREVISIÓN DE NÓMINA (NUEVO MOSTRADOR) */}
-                  {agenteMostrado.nominaProxima && (
+                  {/* BLOQUE DE HISTÓRICO DE NÓMINA (NUEVO CON DESPLEGABLE) */}
+                  {agenteMostrado.historicoNominas && Object.keys(agenteMostrado.historicoNominas).length > 0 && (
                     <div className="bg-white dark:bg-slate-800 rounded-xl p-5 border-2 border-amber-500/40 shadow-sm space-y-4">
-                      <div className="flex justify-between items-center border-b border-slate-200 dark:border-slate-700 pb-3">
+                      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-slate-200 dark:border-slate-700 pb-3 gap-3">
                         <div className="flex items-center space-x-2">
                           <span className="text-lg">💶</span>
-                          <h3 className="text-sm font-bold uppercase tracking-wider text-amber-600 dark:text-amber-400">Previsión Nómina [{agenteMostrado.nominaProxima.mes}]</h3>
+                          <h3 className="text-sm font-bold uppercase tracking-wider text-amber-600 dark:text-amber-400">Histórico de Nóminas</h3>
                         </div>
-                        <span className="text-[11px] text-slate-400 font-medium">Conceptos variables del mes</span>
-                      </div>
-
-                      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-center">
-                        <div className="bg-slate-50 dark:bg-slate-900/60 p-3 rounded-lg border border-slate-100 dark:border-slate-700">
-                          <span className="block text-2xl font-black text-amber-500">{agenteMostrado.nominaProxima.festivos || 0}</span>
-                          <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase">Festivos</span>
-                        </div>
-
-                        <div className="bg-slate-50 dark:bg-slate-900/60 p-3 rounded-lg border border-slate-100 dark:border-slate-700">
-                          <span className="block text-2xl font-black text-indigo-400">{agenteMostrado.nominaProxima.viernesNoche || 0}</span>
-                          <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase">Viernes Noche</span>
-                        </div>
-
-                        <div className="bg-slate-50 dark:bg-slate-900/60 p-3 rounded-lg border border-slate-100 dark:border-slate-700">
-                          <span className="block text-2xl font-black text-blue-400">{agenteMostrado.nominaProxima.sabadosManana || 0}</span>
-                          <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase">Sábados Mañana</span>
-                        </div>
-
-                        <div className="bg-slate-50 dark:bg-slate-900/60 p-3 rounded-lg border border-slate-100 dark:border-slate-700">
-                          <span className="block text-2xl font-black text-blue-500">{agenteMostrado.nominaProxima.sabadosTarde || 0}</span>
-                          <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase">Sábados Tarde</span>
-                        </div>
-
-                        <div className="bg-slate-50 dark:bg-slate-900/60 p-3 rounded-lg border border-slate-100 dark:border-slate-700 col-span-2 sm:col-span-1">
-                          <span className="block text-2xl font-black text-emerald-400">{agenteMostrado.nominaProxima.disponibles || 0}</span>
-                          <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase">Disponibles</span>
+                        
+                        <div className="flex items-center space-x-2">
+                          <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Consultar mes:</span>
+                          <select 
+                            value={mesNominaSeleccionado} 
+                            onChange={(e) => setMesNominaSeleccionado(e.target.value)}
+                            className="bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 text-slate-800 dark:text-slate-200 text-xs rounded-md p-1.5 focus:outline-none focus:border-amber-500 font-bold"
+                          >
+                            {Object.keys(agenteMostrado.historicoNominas)
+                              .sort((a, b) => MESES_ORDEN.indexOf(a) - MESES_ORDEN.indexOf(b))
+                              .map(mes => (
+                                <option key={mes} value={mes}>{mes}</option>
+                            ))}
+                          </select>
                         </div>
                       </div>
 
-                      {agenteMostrado.nominaProxima.observaciones && (
-                        <div className="bg-amber-50 dark:bg-amber-950/30 p-3 rounded-lg border border-amber-200 dark:border-amber-800/50">
-                          <span className="block text-[11px] font-bold text-amber-800 dark:text-amber-300 uppercase mb-0.5">Observaciones / Conciliaciones:</span>
-                          <p className="text-xs text-slate-700 dark:text-slate-200 font-medium">{agenteMostrado.nominaProxima.observaciones}</p>
+                      {mesNominaSeleccionado && agenteMostrado.historicoNominas[mesNominaSeleccionado] && (
+                        <div className="space-y-4">
+                          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-center">
+                            <div className="bg-slate-50 dark:bg-slate-900/60 p-3 rounded-lg border border-slate-100 dark:border-slate-700">
+                              <span className="block text-2xl font-black text-amber-500">{agenteMostrado.historicoNominas[mesNominaSeleccionado].festivos || 0}</span>
+                              <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase">Festivos</span>
+                            </div>
+
+                            <div className="bg-slate-50 dark:bg-slate-900/60 p-3 rounded-lg border border-slate-100 dark:border-slate-700">
+                              <span className="block text-2xl font-black text-indigo-400">{agenteMostrado.historicoNominas[mesNominaSeleccionado].viernesNoche || 0}</span>
+                              <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase">Viernes Noche</span>
+                            </div>
+
+                            <div className="bg-slate-50 dark:bg-slate-900/60 p-3 rounded-lg border border-slate-100 dark:border-slate-700">
+                              <span className="block text-2xl font-black text-blue-400">{agenteMostrado.historicoNominas[mesNominaSeleccionado].sabadosManana || 0}</span>
+                              <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase">Sábados Mañana</span>
+                            </div>
+
+                            <div className="bg-slate-50 dark:bg-slate-900/60 p-3 rounded-lg border border-slate-100 dark:border-slate-700">
+                              <span className="block text-2xl font-black text-blue-500">{agenteMostrado.historicoNominas[mesNominaSeleccionado].sabadosTarde || 0}</span>
+                              <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase">Sábados Tarde</span>
+                            </div>
+
+                            <div className="bg-slate-50 dark:bg-slate-900/60 p-3 rounded-lg border border-slate-100 dark:border-slate-700 col-span-2 sm:col-span-1">
+                              <span className="block text-2xl font-black text-emerald-400">{agenteMostrado.historicoNominas[mesNominaSeleccionado].disponibles || 0}</span>
+                              <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase">Disponibles</span>
+                            </div>
+                          </div>
+
+                          {agenteMostrado.historicoNominas[mesNominaSeleccionado].observaciones && (
+                            <div className="bg-amber-50 dark:bg-amber-950/30 p-3 rounded-lg border border-amber-200 dark:border-amber-800/50">
+                              <span className="block text-[11px] font-bold text-amber-800 dark:text-amber-300 uppercase mb-0.5">Observaciones / Conciliaciones ({mesNominaSeleccionado}):</span>
+                              <p className="text-xs text-slate-700 dark:text-slate-200 font-medium">{agenteMostrado.historicoNominas[mesNominaSeleccionado].observaciones}</p>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
