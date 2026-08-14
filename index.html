@@ -86,9 +86,15 @@
           const emailTech = `${usuarioClean}@policiaportuaria.local`;
 
           try {
+            // Intenta loguearse
             await window.fbAuth.signInWithEmailAndPassword(window.auth, emailTech, passClean);
           } catch (err) {
-            setErrorLogin('Usuario o contraseña/TIP incorrectos.');
+            // Si el usuario no existe aún en Firebase Auth (primer acceso), lo crea automáticamente
+            try {
+              await window.fbAuth.createUserWithEmailAndPassword(window.auth, emailTech, passClean);
+            } catch (createErr) {
+              setErrorLogin('Error al acceder. Revisa tus datos o prueba de nuevo.');
+            }
           }
         };
 
@@ -316,9 +322,22 @@
                   </div>
                 </>
               ) : (
-                <div className="bg-white p-6 rounded-xl text-center">
-                  <p className="text-slate-600 font-medium">No se encontraron datos registrados para este usuario en Firestore.</p>
-                  <p className="text-xs text-slate-400 mt-2">Pide al administrador que suba la plantilla Excel actualizada.</p>
+                <div className="bg-white p-6 rounded-xl text-center shadow-sm border border-slate-200">
+                  <h3 className="text-lg font-bold text-slate-900 mb-1">¡Bienvenido a la Zona Admin!</h3>
+                  <p className="text-slate-600 text-sm mb-4">Aún no hay datos cargados para tu usuario en Firestore porque no se ha subido la plantilla inicial.</p>
+                  
+                  <div className="bg-slate-800 text-white p-5 rounded-xl text-left max-w-xl mx-auto shadow-md">
+                    <h4 className="font-bold text-sm text-slate-200 mb-1">Paso Final: Sincronizar Excel 2026</h4>
+                    <p className="text-xs text-slate-400 mb-3">Sube aquí tu archivo Excel para volcar todos los agentes y permisos de golpe a Firebase.</p>
+                    <input 
+                      type="file" 
+                      accept=".xlsx, .xls"
+                      onChange={handleExcelUpload}
+                      disabled={subiendoExcel}
+                      className="block w-full text-xs text-slate-300 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-500 cursor-pointer"
+                    />
+                    {subiendoExcel && <p className="text-xs text-amber-400 mt-2 animate-pulse">Procesando plantilla e importando a Firestore...</p>}
+                  </div>
                 </div>
               )}
             </main>
