@@ -17,10 +17,9 @@
   <body class="bg-slate-900 text-slate-100">
     <div id="root"></div>
 
-    <!-- Cargar Firebase SDK vía CDN -->
+    <!-- Cargar Firebase Firestore vía CDN -->
     <script type="module">
       import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-      import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut, createUserWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
       import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
       const firebaseConfig = {
@@ -33,19 +32,16 @@
       };
 
       const app = initializeApp(firebaseConfig);
-      window.auth = getAuth(app);
       window.db = getFirestore(app);
-      window.fbAuth = { onAuthStateChanged, signInWithEmailAndPassword, signOut, createUserWithEmailAndPassword };
       window.fbDb = { doc, getDoc, setDoc };
     </script>
 
     <script type="text/babel">
-      const { useState, useEffect } = React;
+      const { useState } = React;
 
       function App() {
-        const [user, setUser] = useState(null);
+        const [userSession, setUserSession] = useState(null);
         const [agente, setAgente] = useState(null);
-        const [loading, setLoading] = useState(false);
         const [usuarioInput, setUsuarioInput] = useState('');
         const [passwordInput, setPasswordInput] = useState('');
         const [errorLogin, setErrorLogin] = useState('');
@@ -64,28 +60,31 @@
 
           // ACCESO DIRECTO ADMIN PARA RUBÉN
           if (usuarioClean === 'rromdur') {
-            setUser({ email: 'rromdur@policiaportuaria.local', uid: 'admin-root' });
+            setUserSession({ usuario: 'rromdur', isAdmin: true });
             return;
           }
 
-          const emailTech = `${usuarioClean}@policiaportuaria.local`;
-          // Formateamos la contraseña a mínimo 6 caracteres internamente (ej: 166 -> 166166)
-          const passTech = tipInput + tipInput;
+          const docKey = `${usuarioClean}@policiaportuaria.local`;
 
           try {
-            await window.fbAuth.signInWithEmailAndPassword(window.auth, emailTech, passTech);
-            setUser({ email: emailTech });
-            
-            // Buscar datos del agente en Firestore
-            const docRef = window.fbDb.doc(window.db, "policias", emailTech);
+            // Consulta directa a Firestore por el ID de usuario
+            const docRef = window.fbDb.doc(window.db, "policias", docKey);
             const docSnap = await window.fbDb.getDoc(docRef);
+
             if (docSnap.exists()) {
-              setAgente(docSnap.data());
+              const dataAgente = docSnap.data();
+              // Validamos que el TIP coincida exactamente
+              if (String(dataAgente.tip).padStart(3, '0') === tipInput) {
+                setAgente(dataAgente);
+                setUserSession({ usuario: usuarioClean, isAdmin: false });
+              } else {
+                setErrorLogin('La TIP / contraseña introducida no es correcta.');
+              }
             } else {
-              setErrorLogin('Usuario autenticado pero sin datos de días cargados.');
+              setErrorLogin('Usuario de Windows no encontrado en el sistema.');
             }
           } catch (err) {
-            setErrorLogin('Usuario o contraseña/TIP incorrectos. Revisa los datos.');
+            setErrorLogin('Error de conexión al verificar los datos.');
           }
         };
 
@@ -109,32 +108,21 @@
               }
 
               const data = XLSX.utils.sheet_to_json(sheetTotal);
-              let creados = 0;
+              let guardados = 0;
 
               for (const fila of data) {
                 if (!fila.NOMBRE || !fila.TIP) continue;
 
                 const tipStr = String(Math.floor(fila.TIP)).trim().padStart(3, '0');
                 
-                // Mapeo directo de la columna USUARIO WINDOWS
                 const usuarioWin = fila['USUARIO WINDOWS'] 
                   ? String(fila['USUARIO WINDOWS']).toLowerCase().trim() 
                   : `policia${tipStr}`;
 
-                const emailAuth = `${usuarioWin}@policiaportuaria.local`;
-                // Duplicamos el TIP para cumplir con el mínimo de 6 caracteres de Firebase (ej: 166166)
-                const passwordAuth = tipStr + tipStr;
+                const docKey = `${usuarioWin}@policiaportuaria.local`;
 
-                // Crear cuenta en Firebase Auth
-                try {
-                  await window.fbAuth.createUserWithEmailAndPassword(window.auth, emailAuth, passwordAuth);
-                  creados++;
-                } catch (err) {
-                  // Si ya existe, no pasa nada
-                }
-
-                // Guardar saldos en Firestore
-                await window.fbDb.setDoc(window.fbDb.doc(window.db, "policias", emailAuth), {
+                // Volcado directo a Firestore
+                await window.fbDb.setDoc(window.fbDb.doc(window.db, "policias", docKey), {
                   nombre: fila.NOMBRE,
                   tip: tipStr,
                   usuarioWindows: usuarioWin,
@@ -166,9 +154,11 @@
                   },
                   ultimaActualizacion: new Date().toLocaleDateString('es-ES')
                 }, { merge: true });
+
+                guardados++;
               }
 
-              alert("¡Sincronización completada con éxito!");
+              alert(`¡Éxito! Se han cargado/actualizado ${guardados} agentes en la base de datos.`);
               window.location.reload();
             } catch (err) {
               alert("Error procesando el archivo: " + err.message);
@@ -179,15 +169,7 @@
           reader.readAsBinaryString(file);
         };
 
-        if (loading) {
-          return (
-            <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center">
-              <p className="animate-pulse text-lg font-medium">Cargando Consulta de Días...</p>
-            </div>
-          );
-        }
-
-        if (!user) {
+        if (!userSession) {
           return (
             <div className="min-h-screen bg-slate-900 text-slate-100 flex items-center justify-center p-4">
               <div className="bg-slate-800 p-8 rounded-2xl shadow-xl w-full max-w-md border border-slate-700">
@@ -311,11 +293,11 @@
               ) : (
                 <div className="bg-white p-6 rounded-xl text-center shadow-sm border border-slate-200">
                   <h3 className="text-lg font-bold text-slate-900 mb-1">Panel Administrador</h3>
-                  <p className="text-slate-600 text-sm mb-4">Sube la plantilla Excel para registrar y actualizar todos los usuarios en Firebase.</p>
+                  <p className="text-slate-600 text-sm mb-4">Sube la plantilla Excel para actualizar Firestore directamente.</p>
                   
                   <div className="bg-slate-800 text-white p-5 rounded-xl text-left max-w-xl mx-auto shadow-md">
                     <h4 className="font-bold text-sm text-slate-200 mb-1">Cargar Plantilla Excel 2026</h4>
-                    <p className="text-xs text-slate-400 mb-3">Sube el archivo para procesar las columnas y crear las credenciales automáticas.</p>
+                    <p className="text-xs text-slate-400 mb-3">Sube el archivo para volcar los datos de los agentes.</p>
                     <input 
                       type="file" 
                       accept=".xlsx, .xls"
@@ -323,7 +305,7 @@
                       disabled={subiendoExcel}
                       className="block w-full text-xs text-slate-300 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-500 cursor-pointer"
                     />
-                    {subiendoExcel && <p className="text-xs text-amber-400 mt-2 animate-pulse">Creando cuentas e importando saldos a Firebase...</p>}
+                    {subiendoExcel && <p className="text-xs text-amber-400 mt-2 animate-pulse">Escribiendo datos en Firestore...</p>}
                   </div>
                 </div>
               )}
