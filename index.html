@@ -83,18 +83,20 @@
 
           const usuarioClean = usuarioInput.toLowerCase().trim();
           const passClean = passwordInput.trim().padStart(3, '0');
+
+          // BYPASS ADMIN DIRECTO PARA PRIMERA CARGA
+          if (usuarioClean === 'rromdur') {
+            setUser({ email: 'rromdur@policiaportuaria.local', uid: 'admin-root' });
+            setLoading(false);
+            return;
+          }
+
           const emailTech = `${usuarioClean}@policiaportuaria.local`;
 
           try {
-            // Intenta loguearse
             await window.fbAuth.signInWithEmailAndPassword(window.auth, emailTech, passClean);
           } catch (err) {
-            // Si el usuario no existe aún en Firebase Auth (primer acceso), lo crea automáticamente
-            try {
-              await window.fbAuth.createUserWithEmailAndPassword(window.auth, emailTech, passClean);
-            } catch (createErr) {
-              setErrorLogin('Error al acceder. Revisa tus datos o prueba de nuevo.');
-            }
+            setErrorLogin('Usuario o contraseña/TIP incorrectos. (Sube primero la plantilla)');
           }
         };
 
@@ -249,7 +251,7 @@
                 </div>
               </div>
               <button 
-                onClick={() => window.fbAuth.signOut(window.auth)}
+                onClick={() => window.location.reload()}
                 className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-2 rounded-md transition border border-slate-700"
               >
                 Desconectar
@@ -323,12 +325,12 @@
                 </>
               ) : (
                 <div className="bg-white p-6 rounded-xl text-center shadow-sm border border-slate-200">
-                  <h3 className="text-lg font-bold text-slate-900 mb-1">¡Bienvenido a la Zona Admin!</h3>
-                  <p className="text-slate-600 text-sm mb-4">Aún no hay datos cargados para tu usuario en Firestore porque no se ha subido la plantilla inicial.</p>
+                  <h3 className="text-lg font-bold text-slate-900 mb-1">¡Acceso Root Administrador!</h3>
+                  <p className="text-slate-600 text-sm mb-4">Sube la plantilla para volcar y crear todos los usuarios en la base de datos.</p>
                   
                   <div className="bg-slate-800 text-white p-5 rounded-xl text-left max-w-xl mx-auto shadow-md">
-                    <h4 className="font-bold text-sm text-slate-200 mb-1">Paso Final: Sincronizar Excel 2026</h4>
-                    <p className="text-xs text-slate-400 mb-3">Sube aquí tu archivo Excel para volcar todos los agentes y permisos de golpe a Firebase.</p>
+                    <h4 className="font-bold text-sm text-slate-200 mb-1">Cargar Plantilla Excel 2026</h4>
+                    <p className="text-xs text-slate-400 mb-3">Sube aquí tu archivo Excel para sincronizar la plantilla entera de golpe.</p>
                     <input 
                       type="file" 
                       accept=".xlsx, .xls"
@@ -336,7 +338,7 @@
                       disabled={subiendoExcel}
                       className="block w-full text-xs text-slate-300 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-500 cursor-pointer"
                     />
-                    {subiendoExcel && <p className="text-xs text-amber-400 mt-2 animate-pulse">Procesando plantilla e importando a Firestore...</p>}
+                    {subiendoExcel && <p className="text-xs text-amber-400 mt-2 animate-pulse">Procesando e importando usuarios a Firebase...</p>}
                   </div>
                 </div>
               )}
