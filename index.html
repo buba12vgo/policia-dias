@@ -67,13 +67,13 @@
           const docKey = `${usuarioClean}@policiaportuaria.local`;
 
           try {
-            // Consulta directa a Firestore por el ID de usuario
+            // Consulta directa a Firestore por la clave del documento
             const docRef = window.fbDb.doc(window.db, "policias", docKey);
             const docSnap = await window.fbDb.getDoc(docRef);
 
             if (docSnap.exists()) {
               const dataAgente = docSnap.data();
-              // Validamos que el TIP coincida exactamente
+              // Validamos que el TIP coincida exactamente (comparando strings limpios)
               if (String(dataAgente.tip).padStart(3, '0') === tipInput) {
                 setAgente(dataAgente);
                 setUserSession({ usuario: usuarioClean, isAdmin: false });
@@ -107,50 +107,76 @@
                 return;
               }
 
-              const data = XLSX.utils.sheet_to_json(sheetTotal);
+              // Lectura por matriz pura (filas y columnas)
+              const rawData = XLSX.utils.sheet_to_json(sheetTotal, { header: 1 });
+
+              // Buscamos dinámicamente la fila donde están las cabeceras ("TIP")
+              let headerRowIndex = rawData.findIndex(row => 
+                row && row.some(cell => String(cell).toUpperCase().includes('TIP'))
+              );
+
+              if (headerRowIndex === -1) headerRowIndex = 0;
+
+              const headers = rawData[headerRowIndex].map(h => String(h || '').trim().toUpperCase());
+
+              // Funciones helper para extracción segura de datos
+              const getVal = (row, keyKeywords) => {
+                const colIdx = headers.findIndex(h => keyKeywords.some(k => h.includes(k)));
+                if (colIdx === -1 || !row[colIdx]) return 0;
+                const val = Number(row[colIdx]);
+                return isNaN(val) ? 0 : val;
+              };
+
+              const getStr = (row, keyKeywords) => {
+                const colIdx = headers.findIndex(h => keyKeywords.some(k => h.includes(k)));
+                if (colIdx === -1 || row[colIdx] === undefined) return '';
+                return String(row[colIdx]).trim();
+              };
+
               let guardados = 0;
 
-              for (const fila of data) {
-                if (!fila.NOMBRE || !fila.TIP) continue;
+              // Procesar filas
+              for (let i = headerRowIndex + 1; i < rawData.length; i++) {
+                const fila = rawData[i];
+                if (!fila || fila.length === 0) continue;
 
-                const tipStr = String(Math.floor(fila.TIP)).trim().padStart(3, '0');
+                const tipRaw = getStr(fila, ['TIP']);
+                const nombreRaw = getStr(fila, ['NOMBRE']);
+
+                if (!tipRaw || !nombreRaw) continue;
+
+                const tipClean = Math.floor(Number(tipRaw));
+                if (isNaN(tipClean) || tipClean === 0) continue;
+
+                const tipStr = String(tipClean).padStart(3, '0');
                 
-                const usuarioWin = fila['USUARIO WINDOWS'] 
-                  ? String(fila['USUARIO WINDOWS']).toLowerCase().trim() 
-                  : `policia${tipStr}`;
+                let usuarioWin = getStr(fila, ['USUARIO WINDOWS', 'USUARIO']).toLowerCase();
+                if (!usuarioWin) usuarioWin = `policia${tipStr}`;
 
                 const docKey = `${usuarioWin}@policiaportuaria.local`;
 
-                // Volcado directo a Firestore
+                // Volcado de saldos mapeados con precisión a Firestore
                 await window.fbDb.setDoc(window.fbDb.doc(window.db, "policias", docKey), {
-                  nombre: fila.NOMBRE,
+                  nombre: nombreRaw,
                   tip: tipStr,
                   usuarioWindows: usuarioWin,
                   saldos: {
                     vacaciones: {
-                      totales: Number(fila.VACACIONES_T || 0),
-                      usados: Number(fila.VACACIONES_U || 0),
-                      pendientes: Number(fila.VACACIONES_P || 0)
+                      totales: getVal(fila, ['VACACIONES_T', 'VAC_T', 'VACACIONES T']),
+                      usados: getVal(fila, ['VACACIONES_U', 'VAC_U', 'VACACIONES U']),
+                      pendientes: getVal(fila, ['VACACIONES_P', 'VAC_P', 'VACACIONES P'])
                     },
                     asuntosPropios: {
-                      totales: Number(fila.PROPIOS_T || 0),
-                      usados: Number(fila.PROPIOS_U || 0),
-                      pendientes: Number(fila.PROPIOS_P || 0)
+                      totales: getVal(fila, ['PROPIOS_T', 'PROP_T', 'PROPIOS T']),
+                      usados: getVal(fila, ['PROPIOS_U', 'PROP_U', 'PROPIOS U']),
+                      pendientes: getVal(fila, ['PROPIOS_P', 'PROP_P', 'PROPIOS P'])
                     },
                     convenio: {
-                      totales: Number(fila.DISPONIBLE_T || 0),
-                      usados: Number(fila.DISPONIBLE_U || 0),
-                      pendientes: Number(fila.DISPONIBLE_P || 0)
+                      totales: getVal(fila, ['DISPONIBLE_T', 'DISP_T', 'DISPONIBLE T']),
+                      usados: getVal(fila, ['DISPONIBLE_U', 'DISP_U', 'DISPONIBLE U']),
+                      pendientes: getVal(fila, ['DISPONIBLE_P', 'DISP_P', 'DISPONIBLE P'])
                     },
-                    vacAdicionales: Number(fila.VAC_ADIC_P || 0),
-                    diasAnteriores: Number(fila.ANTERIOR_P || 0),
-                    jornadaVerano: Number(fila.VERANO_P || 0),
-                    fiestasEspeciales: {
-                      julio16: Number(fila.JULIO16_P || 0),
-                      diciembre24: Number(fila.DICIEMBRE24_P || 0),
-                      diciembre31: Number(fila.DICIEMBRE31_P || 0)
-                    },
-                    totalGlobal: Number(fila.TOTAL_P || 0)
+                    totalGlobal: getVal(fila, ['TOTAL_P', 'TOTAL P', 'TOTAL PENDIENTE', 'TOTAL'])
                   },
                   ultimaActualizacion: new Date().toLocaleDateString('es-ES')
                 }, { merge: true });
@@ -158,10 +184,10 @@
                 guardados++;
               }
 
-              alert(`¡Éxito! Se han cargado/actualizado ${guardados} agentes en la base de datos.`);
+              alert(`¡Éxito! Se han importado correctamente ${guardados} agentes con sus saldos.`);
               window.location.reload();
             } catch (err) {
-              alert("Error procesando el archivo: " + err.message);
+              alert("Error procesando la estructura del Excel: " + err.message);
             }
             setSubiendoExcel(false);
           };
@@ -293,11 +319,11 @@
               ) : (
                 <div className="bg-white p-6 rounded-xl text-center shadow-sm border border-slate-200">
                   <h3 className="text-lg font-bold text-slate-900 mb-1">Panel Administrador</h3>
-                  <p className="text-slate-600 text-sm mb-4">Sube la plantilla Excel para actualizar Firestore directamente.</p>
+                  <p className="text-slate-600 text-sm mb-4">Sube la plantilla Excel para sincronizar todos los saldos directamente.</p>
                   
                   <div className="bg-slate-800 text-white p-5 rounded-xl text-left max-w-xl mx-auto shadow-md">
                     <h4 className="font-bold text-sm text-slate-200 mb-1">Cargar Plantilla Excel 2026</h4>
-                    <p className="text-xs text-slate-400 mb-3">Sube el archivo para volcar los datos de los agentes.</p>
+                    <p className="text-xs text-slate-400 mb-3">Sube el archivo para volcar los saldos exactos a Firestore.</p>
                     <input 
                       type="file" 
                       accept=".xlsx, .xls"
@@ -305,7 +331,7 @@
                       disabled={subiendoExcel}
                       className="block w-full text-xs text-slate-300 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-500 cursor-pointer"
                     />
-                    {subiendoExcel && <p className="text-xs text-amber-400 mt-2 animate-pulse">Escribiendo datos en Firestore...</p>}
+                    {subiendoExcel && <p className="text-xs text-amber-400 mt-2 animate-pulse">Sincronizando registros con Firestore...</p>}
                   </div>
                 </div>
               )}
