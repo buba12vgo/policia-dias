@@ -69,7 +69,6 @@
           }
         }, [darkMode]);
 
-        // Cargar lista de agentes para el admin
         const cargarAgentesAdmin = async () => {
           try {
             const querySnapshot = await window.fbDb.getDocs(window.fbDb.collection(window.db, "policias"));
@@ -77,7 +76,6 @@
             querySnapshot.forEach((doc) => {
               lista.push(doc.data());
             });
-            // Ordenar por TIP
             lista.sort((a, b) => Number(a.tip) - Number(b.tip));
             setListaAgentes(lista);
           } catch (e) {
@@ -124,7 +122,8 @@
           }
         };
 
-        const handleExcelUpload = async (e) => {
+        // SUBIR EXCEL DE SALDOS DE DÍAS (El tradicional)
+        const handleExcelSaldosUpload = async (e) => {
           const file = e.target.files[0];
           if (!file) return;
 
@@ -146,7 +145,6 @@
               const data = XLSX.utils.sheet_to_json(sheetTotal);
               let guardados = 0;
 
-              // Fecha Y HORA exacta de actualización
               const ahora = new Date();
               const fechaHoraStr = `${ahora.toLocaleDateString('es-ES')} a las ${ahora.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}`;
 
@@ -216,10 +214,101 @@
                 guardados++;
               }
 
-              alert(`¡Éxito! Se han importado ${guardados} agentes con fecha y hora actualizadas.`);
+              alert(`¡Éxito! Importados ${guardados} agentes con Saldos de Días.`);
               cargarAgentesAdmin();
             } catch (err) {
-              alert("Error procesando el Excel: " + err.message);
+              alert("Error procesando Excel de Saldos: " + err.message);
+            }
+            setSubiendoExcel(false);
+          };
+
+          reader.readAsBinaryString(file);
+        };
+
+        // SUBIR EXCEL DE NÓMINA (El nuevo con las pestañas por meses)
+        const handleExcelNominaUpload = async (e) => {
+          const file = e.target.files[0];
+          if (!file) return;
+
+          setSubiendoExcel(true);
+          const reader = new FileReader();
+
+          reader.onload = async (evt) => {
+            try {
+              const bstr = evt.target.result;
+              const wb = XLSX.read(bstr, { type: 'binary' });
+
+              // Cogemos la última pestaña útil que tenga datos de meses
+              const mesesValidos = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+              const sheetName = wb.SheetNames.slice().reverse().find(s => mesesValidos.some(m => s.toLowerCase().includes(m.toLowerCase()))) || wb.SheetNames[0];
+
+              const sheet = wb.Sheets[sheetName];
+              const rawData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+              let guardados = 0;
+              const ahora = new Date();
+              const fechaHoraStr = `${ahora.toLocaleDateString('es-ES')} a las ${ahora.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}`;
+
+              for (const fila of rawData) {
+                if (!fila || fila.length < 2) continue;
+
+                // En el Excel de Nómina, el nombre viene formateado como "[102] ROMAN DURAN, RUBEN"
+                const colNombre = String(fila[1] || '');
+                const matchTip = colNombre.match(/\[(\d+)\]/);
+
+                if (!matchTip) continue;
+
+                const tipClean = Math.floor(Number(matchTip[1]));
+                if (isNaN(tipClean) || tipClean === 0) continue;
+
+                const tipStr = String(tipClean).padStart(3, '0');
+
+                // Extraer el nombre limpio
+                const nombreLimpio = colNombre.replace(/\[\d+\]/, '').trim();
+
+                const parseNum = (val) => {
+                  const n = Number(val);
+                  return isNaN(n) ? 0 : n;
+                };
+
+                const datosNomina = {
+                  mes: sheetName,
+                  disponibles: parseNum(fila[2]),
+                  viernesNoche: parseNum(fila[3]),
+                  sabadosManana: parseNum(fila[4]),
+                  sabadosTarde: parseNum(fila[5]),
+                  festivos: parseNum(fila[6]),
+                  observaciones: fila[7] ? String(fila[7]).trim() : ''
+                };
+
+                // Buscar documento por TIP en la lista
+                const querySnapshot = await window.fbDb.getDocs(window.fbDb.collection(window.db, "policias"));
+                let docKeyFound = null;
+
+                querySnapshot.forEach((docSnap) => {
+                  if (docSnap.data().tip === tipStr) {
+                    docKeyFound = docSnap.id;
+                  }
+                });
+
+                if (!docKeyFound) {
+                  docKeyFound = `policia${tipStr}@policiaportuaria.local`;
+                }
+
+                await window.fbDb.setDoc(window.fbDb.doc(window.db, "policias", docKeyFound), {
+                  nombre: nombreLimpio,
+                  tip: tipStr,
+                  nominaProxima: datosNomina,
+                  ultimaActualizacionNomina: fechaHoraStr
+                }, { merge: true });
+
+                guardados++;
+              }
+
+              alert(`¡Éxito! Importados ${guardados} registros de Nómina para el mes de [${sheetName}].`);
+              cargarAgentesAdmin();
+            } catch (err) {
+              alert("Error procesando Excel de Nómina: " + err.message);
             }
             setSubiendoExcel(false);
           };
@@ -245,7 +334,7 @@
                   </div>
                   <h1 className="text-2xl font-black tracking-wider text-white">POLICÍA PORTUARIA</h1>
                   <p className="text-xs text-amber-500 font-bold uppercase tracking-widest mt-1">Autoridad Portuaria de Vigo</p>
-                  <p className="text-[11px] text-slate-400 mt-2">Consulta Individual de Permisos 2026</p>
+                  <p className="text-[11px] text-slate-400 mt-2">Consulta Individual de Permisos y Nómina 2026</p>
                 </div>
 
                 <form onSubmit={handleLogin} className="space-y-4">
@@ -277,7 +366,7 @@
                     type="submit" 
                     className="w-full bg-slate-700 hover:bg-amber-600 text-white font-bold py-3 rounded-lg transition duration-200 shadow-md border border-slate-600 hover:border-amber-500"
                   >
-                    Consultar Mis Días
+                    Consultar Mis Datos
                   </button>
                 </form>
 
@@ -303,7 +392,7 @@
                 </div>
                 <div>
                   <h1 className="font-bold text-base leading-tight tracking-wide">POLICÍA PORTUARIA</h1>
-                  <p className="text-[11px] text-amber-400 font-medium">Puerto de Vigo · Saldos 2026</p>
+                  <p className="text-[11px] text-amber-400 font-medium">Puerto de Vigo · Consulta 2026</p>
                 </div>
               </div>
 
@@ -331,19 +420,32 @@
                   <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                     <div>
                       <h3 className="text-lg font-bold text-amber-400">Panel de Administración</h3>
-                      <p className="text-xs text-slate-300">Carga el Excel o busca cualquier agente de la plantilla.</p>
+                      <p className="text-xs text-slate-300">Actualiza los Saldos de Días o la Nómina del mes.</p>
                     </div>
 
-                    <label className="bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold py-2.5 px-4 rounded-lg cursor-pointer transition shadow border border-amber-400">
-                      {subiendoExcel ? 'Procesando...' : '📁 Actualizar Excel'}
-                      <input 
-                        type="file" 
-                        accept=".xlsx, .xls"
-                        onChange={handleExcelUpload}
-                        disabled={subiendoExcel}
-                        className="hidden"
-                      />
-                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      <label className="bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold py-2.5 px-3 rounded-lg cursor-pointer transition shadow border border-slate-500">
+                        {subiendoExcel ? 'Procesando...' : '📂 Cargar Excel Saldos'}
+                        <input 
+                          type="file" 
+                          accept=".xlsx, .xls"
+                          onChange={handleExcelSaldosUpload}
+                          disabled={subiendoExcel}
+                          className="hidden"
+                        />
+                      </label>
+
+                      <label className="bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold py-2.5 px-3 rounded-lg cursor-pointer transition shadow border border-amber-400">
+                        {subiendoExcel ? 'Procesando...' : '💶 Cargar Excel Nómina'}
+                        <input 
+                          type="file" 
+                          accept=".xlsx, .xls"
+                          onChange={handleExcelNominaUpload}
+                          disabled={subiendoExcel}
+                          className="hidden"
+                        />
+                      </label>
+                    </div>
                   </div>
 
                   <div className="pt-2 border-t border-slate-700">
@@ -379,6 +481,7 @@
 
               {agenteMostrado ? (
                 <>
+                  {/* CABECERA CON DATOS DEL AGENTE */}
                   <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm p-5 border border-slate-200 dark:border-slate-700 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                     <div>
                       <span className="text-xs font-bold tracking-wider uppercase text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800 px-2.5 py-1 rounded-md">
@@ -389,8 +492,8 @@
 
                     <div className="flex flex-col items-start sm:items-end gap-2">
                       <div className="text-left sm:text-right text-xs text-slate-400">
-                        Última actualización: <br />
-                        <span className="font-medium text-slate-700 dark:text-slate-300">{agenteMostrado.ultimaActualizacion || 'Fecha no registrada'}</span>
+                        Última act. Saldos: <span className="font-medium text-slate-700 dark:text-slate-300">{agenteMostrado.ultimaActualizacion || 'S/D'}</span><br />
+                        Última act. Nómina: <span className="font-medium text-amber-600 dark:text-amber-400">{agenteMostrado.ultimaActualizacionNomina || 'S/D'}</span>
                       </div>
 
                       <button 
@@ -402,6 +505,54 @@
                     </div>
                   </div>
 
+                  {/* BLOQUE DE PREVISIÓN DE NÓMINA (NUEVO MOSTRADOR) */}
+                  {agenteMostrado.nominaProxima && (
+                    <div className="bg-white dark:bg-slate-800 rounded-xl p-5 border-2 border-amber-500/40 shadow-sm space-y-4">
+                      <div className="flex justify-between items-center border-b border-slate-200 dark:border-slate-700 pb-3">
+                        <div className="flex items-center space-x-2">
+                          <span className="text-lg">💶</span>
+                          <h3 className="text-sm font-bold uppercase tracking-wider text-amber-600 dark:text-amber-400">Previsión Nómina [{agenteMostrado.nominaProxima.mes}]</h3>
+                        </div>
+                        <span className="text-[11px] text-slate-400 font-medium">Conceptos variables del mes</span>
+                      </div>
+
+                      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-center">
+                        <div className="bg-slate-50 dark:bg-slate-900/60 p-3 rounded-lg border border-slate-100 dark:border-slate-700">
+                          <span className="block text-2xl font-black text-amber-500">{agenteMostrado.nominaProxima.festivos || 0}</span>
+                          <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase">Festivos</span>
+                        </div>
+
+                        <div className="bg-slate-50 dark:bg-slate-900/60 p-3 rounded-lg border border-slate-100 dark:border-slate-700">
+                          <span className="block text-2xl font-black text-indigo-400">{agenteMostrado.nominaProxima.viernesNoche || 0}</span>
+                          <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase">Viernes Noche</span>
+                        </div>
+
+                        <div className="bg-slate-50 dark:bg-slate-900/60 p-3 rounded-lg border border-slate-100 dark:border-slate-700">
+                          <span className="block text-2xl font-black text-blue-400">{agenteMostrado.nominaProxima.sabadosManana || 0}</span>
+                          <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase">Sábados Mañana</span>
+                        </div>
+
+                        <div className="bg-slate-50 dark:bg-slate-900/60 p-3 rounded-lg border border-slate-100 dark:border-slate-700">
+                          <span className="block text-2xl font-black text-blue-500">{agenteMostrado.nominaProxima.sabadosTarde || 0}</span>
+                          <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase">Sábados Tarde</span>
+                        </div>
+
+                        <div className="bg-slate-50 dark:bg-slate-900/60 p-3 rounded-lg border border-slate-100 dark:border-slate-700 col-span-2 sm:col-span-1">
+                          <span className="block text-2xl font-black text-emerald-400">{agenteMostrado.nominaProxima.disponibles || 0}</span>
+                          <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase">Disponibles</span>
+                        </div>
+                      </div>
+
+                      {agenteMostrado.nominaProxima.observaciones && (
+                        <div className="bg-amber-50 dark:bg-amber-950/30 p-3 rounded-lg border border-amber-200 dark:border-amber-800/50">
+                          <span className="block text-[11px] font-bold text-amber-800 dark:text-amber-300 uppercase mb-0.5">Observaciones / Conciliaciones:</span>
+                          <p className="text-xs text-slate-700 dark:text-slate-200 font-medium">{agenteMostrado.nominaProxima.observaciones}</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* BLOQUE DE SALDOS DE DÍAS Y VACACIONES */}
                   <div className="bg-gradient-to-r from-slate-900 via-blue-950 to-slate-900 text-white p-6 rounded-xl shadow-md flex justify-around items-center text-center border-t-2 border-amber-500">
                     <div>
                       <span className="block text-5xl font-black text-amber-400">{agenteMostrado.saldos?.totalGlobal || 0}</span>
