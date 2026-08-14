@@ -229,7 +229,7 @@
           reader.readAsBinaryString(file);
         };
 
-        // SUBIR EXCEL DE NÓMINA (CON BUSCADOR DINÁMICO DE COLUMNAS)
+        // SUBIR EXCEL DE NÓMINA (CON BLINDAJE CONTRA COLUMNAS VACÍAS)
         const handleExcelNominaUpload = async (e) => {
           const file = e.target.files[0];
           if (!file) return;
@@ -259,14 +259,15 @@
                 const sheet = wb.Sheets[sheetName];
                 const rawData = XLSX.utils.sheet_to_json(sheet, { header: 1 });
 
-                // BUSCAR DÓNDE ESTÁN LAS CABECERAS REALES
+                // BUSCAR DÓNDE ESTÁN LAS CABECERAS REALES BLINDADO
                 let headerRowIndex = rawData.findIndex(row => row && row.some(cell => typeof cell === 'string' && cell.toUpperCase().includes('FESTIVO')));
                 if (headerRowIndex === -1) headerRowIndex = 0; // Backup
                 
-                const headers = rawData[headerRowIndex].map(h => String(h || '').trim().toUpperCase());
+                // Array.from asegura que si el Excel tiene "huecos invisibles", se transformen en strings vacíos sin petar
+                const headers = Array.from(rawData[headerRowIndex] || []).map(h => String(h || '').trim().toUpperCase());
 
-                // Funciones para buscar la posición exacta de cada columna
-                const getColIdx = (keywords) => headers.findIndex(h => keywords.some(k => h.includes(k)));
+                // Funciones para buscar la posición exacta de cada columna (comprobando que h existe)
+                const getColIdx = (keywords) => headers.findIndex(h => h && keywords.some(k => h.includes(k)));
 
                 const idxDisp = getColIdx(['DISPONIBLE', 'DISP']);
                 const idxViernes = getColIdx(['VIERNES']);
@@ -279,7 +280,6 @@
                   const fila = rawData[i];
                   if (!fila || fila.length < 2) continue;
 
-                  // Extraer nombre y TIP independientemente de la columna
                   let colNombre = '';
                   for(let cell of fila) {
                     if (typeof cell === 'string' && cell.match(/\[(\d+)\]/)) {
@@ -301,7 +301,6 @@
                     agentesData[tipStr] = { nombre: nombreLimpio, historicoNominas: {} };
                   }
 
-                  // Parser de números a prueba de balas (comas, espacios, etc)
                   const parseNumSeguro = (idx, fallbackIdx) => {
                     const finalIdx = idx !== -1 ? idx : fallbackIdx;
                     if (finalIdx === -1 || fila[finalIdx] === undefined || fila[finalIdx] === null) return 0;
@@ -316,7 +315,7 @@
                     viernesNoche: parseNumSeguro(idxViernes, 3),
                     sabadosManana: parseNumSeguro(idxSabM, 4),
                     sabadosTarde: parseNumSeguro(idxSabT, 5),
-                    festivos: parseNumSeguro(idxFest, 6), // <- Aquí estaba el fallo al leer fijamente la col 6
+                    festivos: parseNumSeguro(idxFest, 6),
                     observaciones: (idxObs !== -1 && fila[idxObs]) ? String(fila[idxObs]).trim() : (fila[7] ? String(fila[7]).trim() : '')
                   };
                 }
@@ -342,7 +341,7 @@
                 guardados++;
               }
 
-              alert(`¡Éxito! Importado el histórico de ${hojasMeses.length} meses para ${guardados} agentes.`);
+              alert(`¡Éxito! Importado el histórico de ${hojasMeses.length} meses para ${guardados} agentes sin fallos de lectura.`);
               cargarAgentesAdmin();
             } catch (err) {
               alert("Error procesando Excel de Nómina: " + err.message);
