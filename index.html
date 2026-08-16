@@ -61,7 +61,6 @@
         
         const [mesNominaSeleccionado, setMesNominaSeleccionado] = useState('');
 
-        // Estados para el Modal de Contraseña
         const [showPassModal, setShowPassModal] = useState(false);
         const [passActual, setPassActual] = useState('');
         const [passNueva, setPassNueva] = useState('');
@@ -78,15 +77,39 @@
           }
         }, [darkMode]);
 
+        // Cargar Agentes con FUSIÓN de DUPLICADOS para el panel Admin
         const cargarAgentesAdmin = async () => {
           try {
             const querySnapshot = await window.fbDb.getDocs(window.fbDb.collection(window.db, "policias"));
-            const lista = [];
+            const mapaFusión = {};
+            
             querySnapshot.forEach((doc) => {
-              lista.push(doc.data());
+              const data = doc.data();
+              if (!data.tip) return;
+              
+              const tipLimpio = String(data.tip).padStart(3, '0');
+              
+              if (!mapaFusión[tipLimpio]) {
+                mapaFusión[tipLimpio] = { ...data };
+              } else {
+                // Fusionar datos para no perder historiales ni saldos de los duplicados
+                if (data.historicoNominas) {
+                  mapaFusión[tipLimpio].historicoNominas = { ...(mapaFusión[tipLimpio].historicoNominas || {}), ...data.historicoNominas };
+                }
+                if (data.saldos && !mapaFusión[tipLimpio].saldos) {
+                  mapaFusión[tipLimpio].saldos = data.saldos;
+                }
+                // Preferir usuario real frente al genérico "policiaXXX"
+                if (String(mapaFusión[tipLimpio].usuarioWindows).startsWith('policia') && !String(data.usuarioWindows).startsWith('policia')) {
+                  mapaFusión[tipLimpio].usuarioWindows = data.usuarioWindows;
+                  mapaFusión[tipLimpio].nombre = data.nombre || mapaFusión[tipLimpio].nombre;
+                }
+              }
             });
-            lista.sort((a, b) => Number(a.tip) - Number(b.tip));
-            setListaAgentes(lista);
+
+            const listaLimpia = Object.values(mapaFusión);
+            listaLimpia.sort((a, b) => Number(a.tip) - Number(b.tip));
+            setListaAgentes(listaLimpia);
           } catch (e) {
             console.error("Error cargando agentes:", e);
           }
@@ -158,7 +181,6 @@
             setMsgPass({ text: 'La contraseña debe tener al menos 3 caracteres.', type: 'error' });
             return;
           }
-
           if (passNueva !== passRepetida) {
             setMsgPass({ text: 'Las contraseñas nuevas no coinciden.', type: 'error' });
             return;
@@ -191,7 +213,6 @@
               setPassRepetida('');
               setMsgPass({ text: '', type: '' });
             }, 2000);
-
           } catch (err) {
             setMsgPass({ text: 'Error al actualizar: ' + err.message, type: 'error' });
           }
@@ -288,6 +309,7 @@
           reader.readAsBinaryString(file);
         };
 
+        // SUBIR EXCEL DE NÓMINA (INYECCIÓN A MÚLTIPLES DOCUMENTOS POR TIP)
         const handleExcelNominaUpload = async (e) => {
           const file = e.target.files[0];
           if (!file) return;
@@ -343,7 +365,6 @@
                   }
                   if (!colNombre) colNombre = String(fila[1] || '');
 
-                  // Blindaje de regex contra ceros a la izquierda o espacios raros [ 094 ] o [94]
                   const matchTip = colNombre.match(/\[\s*0*(\d+)\s*\]/);
                   if (!matchTip) continue;
 
@@ -376,42 +397,42 @@
                 }
               }
 
-              // LÓGICA ANTIDUPLICADOS: Preferir siempre el documento real de Windows
+              // OBTENER TODOS LOS DOCUMENTOS PARA ATACAR LOS DUPLICADOS
               const querySnapshot = await window.fbDb.getDocs(window.fbDb.collection(window.db, "policias"));
-              const tipToDocKey = {};
+              const tipToDocsArray = {};
               
               querySnapshot.forEach((docSnap) => {
                 const data = docSnap.data();
                 if (!data.tip) return;
+                const tipStr = String(data.tip).trim().replace(/^0+/, '').padStart(3, '0');
                 
-                const tipStrNormalizado = String(data.tip).trim().replace(/^0+/, '').padStart(3, '0');
-                
-                if (!tipToDocKey[tipStrNormalizado]) {
-                  tipToDocKey[tipStrNormalizado] = docSnap.id;
-                } else {
-                  const idExistente = tipToDocKey[tipStrNormalizado];
-                  const idNuevo = docSnap.id;
-                  if (idExistente.startsWith("policia") && !idNuevo.startsWith("policia")) {
-                    tipToDocKey[tipStrNormalizado] = idNuevo;
-                  }
+                if (!tipToDocsArray[tipStr]) {
+                  tipToDocsArray[tipStr] = [];
                 }
+                tipToDocsArray[tipStr].push(docSnap.id);
               });
 
               let guardados = 0;
               for (const tipStr in agentesData) {
-                const docKeyFound = tipToDocKey[tipStr] || `policia${tipStr}@policiaportuaria.local`;
+                // Si el TIP tiene 3 documentos fantasma, le inyectamos la nómina a los 3 a la vez.
+                const docsAActualizar = tipToDocsArray[tipStr] && tipToDocsArray[tipStr].length > 0 
+                  ? tipToDocsArray[tipStr] 
+                  : [`policia${tipStr}@policiaportuaria.local`];
+                
                 const dataToSave = agentesData[tipStr];
 
-                await window.fbDb.setDoc(window.fbDb.doc(window.db, "policias", docKeyFound), {
-                  nombre: dataToSave.nombre,
-                  tip: tipStr,
-                  historicoNominas: dataToSave.historicoNominas,
-                  ultimaActualizacionNomina: fechaHoraStr
-                }, { merge: true });
+                for (const docKey of docsAActualizar) {
+                  await window.fbDb.setDoc(window.fbDb.doc(window.db, "policias", docKey), {
+                    nombre: dataToSave.nombre,
+                    tip: tipStr,
+                    historicoNominas: dataToSave.historicoNominas,
+                    ultimaActualizacionNomina: fechaHoraStr
+                  }, { merge: true });
+                }
                 guardados++;
               }
 
-              alert(`¡Éxito! Importado el histórico de nóminas para ${guardados} agentes. Duplicados resueltos.`);
+              alert(`¡Éxito! Importada Nómina para ${guardados} agentes. Sincronización antiduplicados aplicada a toda la base de datos.`);
               cargarAgentesAdmin();
             } catch (err) {
               alert("Error procesando Excel de Nómina: " + err.message);
