@@ -120,7 +120,6 @@
               const tipAgente = String(dataAgente.tip).padStart(3, '0');
               const passReal = dataAgente.passwordPersonal || tipAgente;
 
-              // Validamos: O coincide la contraseña personalizada, o coincide el TIP rellenado a 3 ceros si no ha cambiado la clave
               const esValido = (inputPass === passReal) || (!dataAgente.passwordPersonal && inputPass.padStart(3, '0') === tipAgente);
 
               if (esValido) {
@@ -322,7 +321,6 @@
                 if (headerRowIndex === -1) headerRowIndex = 0; 
                 
                 const headers = Array.from(rawData[headerRowIndex] || []).map(h => String(h || '').trim().toUpperCase());
-
                 const getColIdx = (keywords) => headers.findIndex(h => h && keywords.some(k => h.includes(k)));
 
                 const idxDisp = getColIdx(['DISPONIBLE', 'DISP']);
@@ -338,20 +336,21 @@
 
                   let colNombre = '';
                   for(let cell of fila) {
-                    if (typeof cell === 'string' && cell.match(/\[(\d+)\]/)) {
+                    if (typeof cell === 'string' && cell.match(/\[\s*\d+\s*\]/)) {
                       colNombre = cell;
                       break;
                     }
                   }
                   if (!colNombre) colNombre = String(fila[1] || '');
 
-                  const matchTip = colNombre.match(/\[(\d+)\]/);
+                  // Blindaje de regex contra ceros a la izquierda o espacios raros [ 094 ] o [94]
+                  const matchTip = colNombre.match(/\[\s*0*(\d+)\s*\]/);
                   if (!matchTip) continue;
 
                   const tipClean = Math.floor(Number(matchTip[1]));
                   if (isNaN(tipClean) || tipClean === 0) continue;
                   const tipStr = String(tipClean).padStart(3, '0');
-                  const nombreLimpio = colNombre.replace(/\[\d+\]/, '').trim();
+                  const nombreLimpio = colNombre.replace(/\[.*?\]/, '').trim();
 
                   if (!agentesData[tipStr]) {
                     agentesData[tipStr] = { nombre: nombreLimpio, historicoNominas: {} };
@@ -377,10 +376,25 @@
                 }
               }
 
+              // LÓGICA ANTIDUPLICADOS: Preferir siempre el documento real de Windows
               const querySnapshot = await window.fbDb.getDocs(window.fbDb.collection(window.db, "policias"));
               const tipToDocKey = {};
+              
               querySnapshot.forEach((docSnap) => {
-                tipToDocKey[docSnap.data().tip] = docSnap.id;
+                const data = docSnap.data();
+                if (!data.tip) return;
+                
+                const tipStrNormalizado = String(data.tip).trim().replace(/^0+/, '').padStart(3, '0');
+                
+                if (!tipToDocKey[tipStrNormalizado]) {
+                  tipToDocKey[tipStrNormalizado] = docSnap.id;
+                } else {
+                  const idExistente = tipToDocKey[tipStrNormalizado];
+                  const idNuevo = docSnap.id;
+                  if (idExistente.startsWith("policia") && !idNuevo.startsWith("policia")) {
+                    tipToDocKey[tipStrNormalizado] = idNuevo;
+                  }
+                }
               });
 
               let guardados = 0;
@@ -397,7 +411,7 @@
                 guardados++;
               }
 
-              alert(`¡Éxito! Importado el histórico de ${hojasMeses.length} meses para ${guardados} agentes sin fallos de lectura.`);
+              alert(`¡Éxito! Importado el histórico de nóminas para ${guardados} agentes. Duplicados resueltos.`);
               cargarAgentesAdmin();
             } catch (err) {
               alert("Error procesando Excel de Nómina: " + err.message);
